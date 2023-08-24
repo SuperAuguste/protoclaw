@@ -1,11 +1,14 @@
 # protoclaw
 
+# this doesnt work yet, please do not use
+
 Fully self-contained Protobuf compiler for Zig.
 
 <!-- omit in toc -->
 ## Table of Contents
 
 - [protoclaw](#protoclaw)
+- [this doesnt work yet, please do not use](#this-doesnt-work-yet-please-do-not-use)
   - [Usage](#usage)
     - [CLI](#cli)
     - [`build.zig` Integration](#buildzig-integration)
