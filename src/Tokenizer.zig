@@ -186,9 +186,10 @@ pub fn tokenize(tokenizer: *Tokenizer, allocator: std.mem.Allocator, buffer: []c
 
                         switch (buffer[index + 1]) {
                             '0'...'9' => {
-                                state = .number_literal;
+                                state = .number_literal_float_hint;
                             },
                             else => {
+                                tag = .dot;
                                 index += 1;
                                 break;
                             },

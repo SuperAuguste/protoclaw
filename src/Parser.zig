@@ -1,5 +1,6 @@
 const std = @import("std");
 const Tokenizer = @import("Tokenizer.zig");
+const Ast = @import("Ast.zig");
 
 const Token = Tokenizer.Token;
 
@@ -31,6 +32,8 @@ pub const Node = struct {
         number_literal,
 
         builtin_type,
+        /// (fully) qualified identifier
+        ///
         /// main_token is first token in sequence
         /// data is last token in sequence
         ///
@@ -38,50 +41,37 @@ pub const Node = struct {
         /// identifier is fully qualified
         qualified_identifier,
 
+        /// main_token is variant
         syntax,
         import,
+        /// data is qualified_identifier
         package,
         option,
 
         /// main_token is message name
         message_decl,
+        /// main_token is enum name
+        enum_decl,
+
         /// main_token is field name
         ///
         /// cardinality (required/optional/repeated) is type_name_node - 1
         /// field number is type_name_node + 1
         message_field_decl,
+        /// main_token is value name
+        enum_value_decl,
     };
 
     pub const Data = packed union {
-        pub const Root = packed struct {
-            start_extra: u32,
-            end_extra: u32,
-        };
-
         pub const Sign = enum(u64) {
             positive,
             negative,
         };
 
-        pub const Syntax = enum(u64) {
-            proto2,
-            proto3,
-        };
-
-        pub const Import = packed struct {
-            pub const Kind = enum(u32) {
-                default,
-                weak,
-                public,
-            };
-
-            kind: Kind,
-            string_token: u32,
-        };
-
-        pub const Package = packed struct {
-            start_token: u32,
-            end_token: u32,
+        pub const ImportKind = enum(u32) {
+            default,
+            weak,
+            public,
         };
 
         pub const Option = packed struct {
@@ -90,9 +80,9 @@ pub const Node = struct {
             value_node: u32,
         };
 
-        pub const MessageDecl = packed struct {
-            start_extra: u32,
-            end_extra: u32,
+        pub const ChildrenInExtra = packed struct {
+            start: u32,
+            end: u32,
         };
 
         pub const MessageFieldDecl = packed struct(u64) {
@@ -100,20 +90,23 @@ pub const Node = struct {
             compact_options_node: u32,
         };
 
-        root: Root,
+        pub const EnumValueDecl = packed struct(u64) {
+            number_node: u32,
+            compact_options_node: u32,
+        };
 
         none: void,
         number_literal: Sign,
 
         qualified_identifier: u32,
 
-        syntax: Syntax,
-        import: Import,
-        package: Package,
+        import: ImportKind,
+        package: u32,
         option: Option,
 
-        message_decl: MessageDecl,
+        children_in_extra: ChildrenInExtra,
         message_field_decl: MessageFieldDecl,
+        enum_value_decl: EnumValueDecl,
     };
 
     tag: Tag,
@@ -149,7 +142,7 @@ fn expectToken(parser: *Parser, tag: Token.Tag) ParseError!u32 {
 }
 
 const ParseError = std.mem.Allocator.Error || error{Invalid};
-pub fn parse(parser: *Parser) ParseError!void {
+pub fn parse(parser: *Parser) ParseError!Ast {
     const initial_scratch_len = parser.scratch.items.len;
     defer parser.scratch.items.len = initial_scratch_len;
 
@@ -157,31 +150,25 @@ pub fn parse(parser: *Parser) ParseError!void {
         .tag = .root,
         .main_token = 0,
         .data = .{
-            .root = .{
-                .start_extra = 0,
-                .end_extra = 0,
+            .children_in_extra = .{
+                .start = 0,
+                .end = 0,
             },
         },
     });
 
     if (parser.eatToken(.keyword_syntax)) |syntax_token| {
+        _ = syntax_token;
         _ = try parser.expectToken(.equals);
-        const spec_index = try parser.expectToken(.string_literal);
+        const spec_token = try parser.expectToken(.string_literal);
         _ = try parser.expectToken(.semicolon);
-        const spec = parser.source[parser.token_starts[spec_index]..parser.token_ends[spec_index]];
 
         try parser.nodes.append(parser.allocator, .{
             .tag = .syntax,
-            .main_token = syntax_token,
-            .data = .{
-                .syntax = if (std.mem.eql(u8, spec, "\"proto2\""))
-                    .proto2
-                else if (std.mem.eql(u8, spec, "\"proto3\""))
-                    .proto3
-                else
-                    return error.Invalid,
-            },
+            .main_token = spec_token,
+            .data = .{ .none = void{} },
         });
+        try parser.scratch.append(parser.allocator, @intCast(parser.nodes.len - 1));
     }
 
     while (try parser.parseFileElement()) |node|
@@ -190,9 +177,24 @@ pub fn parse(parser: *Parser) ParseError!void {
     const start_extra = parser.extra.items.len;
     try parser.extra.appendSlice(parser.allocator, parser.scratch.items[initial_scratch_len..]);
 
-    parser.nodes.items(.data)[0].root = .{
-        .start_extra = @intCast(start_extra),
-        .end_extra = @intCast(parser.extra.items.len),
+    parser.nodes.items(.data)[0].children_in_extra = .{
+        .start = @intCast(start_extra),
+        .end = @intCast(parser.extra.items.len),
+    };
+
+    const node_slices = parser.nodes.slice();
+    return .{
+        .source = parser.source,
+
+        .token_tags = parser.token_tags,
+        .token_starts = parser.token_starts,
+        .token_ends = parser.token_ends,
+
+        .node_tags = node_slices.items(.tag),
+        .node_main_tokens = node_slices.items(.main_token),
+        .node_data = node_slices.items(.data),
+
+        .extra = try parser.extra.toOwnedSlice(parser.allocator),
     };
 }
 
@@ -200,7 +202,7 @@ fn parseFileElement(parser: *Parser) ParseError!?u32 {
     const token = parser.nextToken();
     switch (parser.token_tags[token]) {
         .keyword_import => {
-            const kind: Node.Data.Import.Kind = switch (parser.token_tags[parser.token_index]) {
+            const kind_token: Node.Data.ImportKind = switch (parser.token_tags[parser.token_index]) {
                 .keyword_weak => b: {
                     parser.token_index += 1;
                     break :b .weak;
@@ -216,41 +218,26 @@ fn parseFileElement(parser: *Parser) ParseError!?u32 {
 
             try parser.nodes.append(parser.allocator, .{
                 .tag = .import,
-                .main_token = token,
-                .data = .{
-                    .import = .{
-                        .kind = kind,
-                        .string_token = string_token,
-                    },
-                },
+                .main_token = string_token,
+                .data = .{ .import = kind_token },
             });
 
             return @intCast(parser.nodes.len - 1);
         },
         .keyword_package => {
-            const start_token = try parser.expectToken(.identifier);
-            var end_token: u32 = start_token;
-
-            while (parser.eatToken(.dot)) |_| {
-                end_token = parser.eatToken(.identifier) orelse break;
-            }
-
+            const fqi = try parser.parseQualifiedIdentifier();
             _ = try parser.expectToken(.semicolon);
 
             try parser.nodes.append(parser.allocator, .{
                 .tag = .package,
                 .main_token = token,
-                .data = .{
-                    .package = .{
-                        .start_token = start_token,
-                        .end_token = end_token,
-                    },
-                },
+                .data = .{ .package = fqi },
             });
             return @intCast(parser.nodes.len - 1);
         },
         .keyword_option => return try parser.parseOption(token),
         .keyword_message => return try parser.parseMessageDecl(),
+        .keyword_enum => return try parser.parseEnumDecl(),
         else => return null,
     }
 }
@@ -323,6 +310,8 @@ fn parseMessageDecl(parser: *Parser) ParseError!u32 {
         const token = parser.nextToken();
         try parser.scratch.append(parser.allocator, switch (parser.token_tags[token]) {
             .keyword_message => try parser.parseMessageDecl(),
+            .keyword_enum => try parser.parseEnumDecl(),
+
             .r_brace => break,
 
             .keyword_required,
@@ -360,9 +349,44 @@ fn parseMessageDecl(parser: *Parser) ParseError!u32 {
         .tag = .message_decl,
         .main_token = main_token,
         .data = .{
-            .message_decl = .{
-                .start_extra = @intCast(start_extra),
-                .end_extra = @intCast(parser.extra.items.len),
+            .children_in_extra = .{
+                .start = @intCast(start_extra),
+                .end = @intCast(parser.extra.items.len),
+            },
+        },
+    });
+    return @intCast(parser.nodes.len - 1);
+}
+
+fn parseEnumDecl(parser: *Parser) ParseError!u32 {
+    const initial_scratch_len = parser.scratch.items.len;
+    defer parser.scratch.items.len = initial_scratch_len;
+
+    const main_token = try parser.expectToken(.identifier);
+    _ = try parser.expectToken(.l_brace);
+
+    while (true) {
+        const token = parser.nextToken();
+        try parser.scratch.append(parser.allocator, switch (parser.token_tags[token]) {
+            .r_brace => break,
+            .identifier => b: {
+                parser.token_index -= 1;
+                break :b try parser.parseEnumValueDecl();
+            },
+            else => return error.Invalid,
+        });
+    }
+
+    const start_extra = parser.extra.items.len;
+    try parser.extra.appendSlice(parser.allocator, parser.scratch.items[initial_scratch_len..]);
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .enum_decl,
+        .main_token = main_token,
+        .data = .{
+            .children_in_extra = .{
+                .start = @intCast(start_extra),
+                .end = @intCast(parser.extra.items.len),
             },
         },
     });
@@ -370,6 +394,21 @@ fn parseMessageDecl(parser: *Parser) ParseError!u32 {
 }
 
 fn parseQualifiedIdentifier(parser: *Parser) ParseError!u32 {
+    const first = try parser.expectToken(.identifier);
+    var last: u32 = first;
+
+    while (parser.eatToken(.dot)) |_|
+        last = try parser.expectToken(.identifier);
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .qualified_identifier,
+        .main_token = first,
+        .data = .{ .qualified_identifier = last },
+    });
+    return @intCast(parser.nodes.len - 1);
+}
+
+fn parseFullyQualifiedIdentifier(parser: *Parser) ParseError!u32 {
     const fq_dot = parser.eatToken(.dot);
     const first = try parser.expectToken(.identifier);
     var last: u32 = first;
@@ -380,9 +419,7 @@ fn parseQualifiedIdentifier(parser: *Parser) ParseError!u32 {
     try parser.nodes.append(parser.allocator, .{
         .tag = .qualified_identifier,
         .main_token = fq_dot orelse first,
-        .data = .{
-            .qualified_identifier = last,
-        },
+        .data = .{ .qualified_identifier = last },
     });
     return @intCast(parser.nodes.len - 1);
 }
@@ -400,7 +437,7 @@ fn parseMessageFieldDecl(parser: *Parser) ParseError!u32 {
     }
 
     const type_name_node: u32 = switch (parser.token_tags[parser.token_index]) {
-        .dot, .identifier => try parser.parseQualifiedIdentifier(),
+        .dot, .identifier => try parser.parseFullyQualifiedIdentifier(),
         .keyword_int32,
         .keyword_sint32,
         .keyword_sfixed32,
@@ -438,6 +475,35 @@ fn parseMessageFieldDecl(parser: *Parser) ParseError!u32 {
         .data = .{
             .message_field_decl = .{
                 .type_name_node = type_name_node,
+                .compact_options_node = 0,
+            },
+        },
+    });
+    return @intCast(parser.nodes.len - 1);
+}
+
+/// TODO: Support compact options
+fn parseEnumValueDecl(parser: *Parser) ParseError!u32 {
+    const main_token = try parser.expectToken(.identifier);
+
+    _ = try parser.expectToken(.equals);
+    const sign: Node.Data.Sign = if (parser.eatToken(.minus)) |_| .negative else .positive;
+    const int_token = try parser.expectToken(.int_literal);
+    _ = try parser.expectToken(.semicolon);
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .number_literal,
+        .main_token = int_token,
+        .data = .{ .number_literal = sign },
+    });
+    const int_node: u32 = @intCast(parser.nodes.len - 1);
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .enum_value_decl,
+        .main_token = main_token,
+        .data = .{
+            .enum_value_decl = .{
+                .number_node = int_node,
                 .compact_options_node = 0,
             },
         },
