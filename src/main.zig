@@ -19,22 +19,28 @@ pub fn main() !void {
     var parser = Parser.init(allocator, buf, tokenizer.tokens.slice());
     try parser.parse();
 
-    for (0..parser.nodes.len) |idx| {
-        const node = parser.nodes.get(idx);
+    const root_data = parser.nodes.items(.data)[0].root;
+    for (parser.extra.items[root_data.start_extra..root_data.end_extra]) |node_idx| {
+        const node = parser.nodes.get(node_idx);
         std.log.info("{any}", .{node});
-        switch (node.tag) {
-            // .number_literal => {
-            //     std.log.info("{s}: {any} ", .{
-            //         buf[tokenizer.tokens.items(.start)[node.main_token]..tokenizer.tokens.items(.end)[node.main_token]],
-            //         node.data.number_literal,
-            //     });
-            // },
-            // .message_decl => {
-            //     std.log.info("{any}", .{parser.extra.items[node.data.message_decl.start_extra..node.data.message_decl.end_extra]});
-            // },
-            else => {},
-        }
     }
+
+    // for (0..parser.nodes.len) |idx| {
+    //     const node = parser.nodes.get(idx);
+    //     std.log.info("{any}", .{node});
+    //     switch (node.tag) {
+    //         // .number_literal => {
+    //         //     std.log.info("{s}: {any} ", .{
+    //         //         buf[tokenizer.tokens.items(.start)[node.main_token]..tokenizer.tokens.items(.end)[node.main_token]],
+    //         //         node.data.number_literal,
+    //         //     });
+    //         // },
+    //         // .message_decl => {
+    //         //     std.log.info("{any}", .{parser.extra.items[node.data.message_decl.start_extra..node.data.message_decl.end_extra]});
+    //         // },
+    //         else => {},
+    //     }
+    // }
 
     // std.log.info("{any}", .{parser.tokens.items(.tag)[parser.index]});
     // std.log.info("{any}", .{parser.nodes.items(.tag)});
