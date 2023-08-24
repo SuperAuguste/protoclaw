@@ -20,7 +20,20 @@ pub fn main() !void {
     try parser.parse();
 
     for (0..parser.nodes.len) |idx| {
-        std.log.info("{any}", .{parser.nodes.get(idx)});
+        const node = parser.nodes.get(idx);
+        std.log.info("{any}", .{node});
+        switch (node.tag) {
+            // .number_literal => {
+            //     std.log.info("{s}: {any} ", .{
+            //         buf[tokenizer.tokens.items(.start)[node.main_token]..tokenizer.tokens.items(.end)[node.main_token]],
+            //         node.data.number_literal,
+            //     });
+            // },
+            // .message_decl => {
+            //     std.log.info("{any}", .{parser.extra.items[node.data.message_decl.start_extra..node.data.message_decl.end_extra]});
+            // },
+            else => {},
+        }
     }
 
     // std.log.info("{any}", .{parser.tokens.items(.tag)[parser.index]});
