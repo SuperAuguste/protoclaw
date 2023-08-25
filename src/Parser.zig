@@ -48,6 +48,10 @@ pub const Node = struct {
         package,
         option,
 
+        message_literal,
+        list_literal,
+        type_url,
+
         /// main_token is message name
         message_decl,
         /// main_token is enum name
@@ -76,8 +80,13 @@ pub const Node = struct {
 
         pub const Option = packed struct {
             // TODO: https://protobuf.com/docs/language-spec#option-names
-            name_token: u32,
+            name_node: u32,
             value_node: u32,
+        };
+
+        pub const TypeUrl = packed struct {
+            root_node: u32,
+            path_node: u32,
         };
 
         pub const ChildrenInExtra = packed struct {
@@ -103,6 +112,8 @@ pub const Node = struct {
         import: ImportKind,
         package: u32,
         option: Option,
+
+        type_url: TypeUrl,
 
         children_in_extra: ChildrenInExtra,
         message_field_decl: MessageFieldDecl,
@@ -242,15 +253,14 @@ fn parseFileElement(parser: *Parser) ParseError!?u32 {
     }
 }
 
-/// Assumes option keyword has already been consumed
-/// TODO: Support MessageLiteralWithBraces
-fn parseOption(parser: *Parser, keyword_token: u32) ParseError!u32 {
-    // TODO: Parse full name system
-    const name_token = try parser.expectToken(.identifier);
-    _ = try parser.expectToken(.equals);
-
+fn parseScalarValue(parser: *Parser) ParseError!u32 {
     const value_token = parser.nextToken();
     switch (parser.token_tags[value_token]) {
+        .identifier => try parser.nodes.append(parser.allocator, .{
+            .tag = .qualified_identifier,
+            .main_token = value_token,
+            .data = .{ .qualified_identifier = value_token },
+        }),
         .string_literal => try parser.nodes.append(parser.allocator, .{
             .tag = .string_literal,
             .main_token = value_token,
@@ -283,12 +293,38 @@ fn parseOption(parser: *Parser, keyword_token: u32) ParseError!u32 {
         else => return error.Invalid,
     }
 
+    return @intCast(parser.nodes.len - 1);
+}
+
+/// Assumes option keyword has already been consumed
+/// TODO: Support MessageLiteralWithBraces
+fn parseOption(parser: *Parser, keyword_token: u32) ParseError!u32 {
+    // TODO: Parse names properly
+    const name_node = try parser.parseQualifiedIdentifier();
+    _ = try parser.expectToken(.equals);
+
+    switch (parser.token_tags[parser.token_index]) {
+        .string_literal,
+        .int_literal,
+        .float_literal,
+        .keyword_inf,
+        .plus,
+        .minus,
+        => _ = try parser.parseScalarValue(),
+        .l_brace => {
+            parser.token_index += 1;
+            _ = try parser.parseMessageLiteral();
+            _ = try parser.expectToken(.r_brace);
+        },
+        else => return error.Invalid,
+    }
+
     try parser.nodes.append(parser.allocator, .{
         .tag = .option,
         .main_token = keyword_token,
         .data = .{
             .option = .{
-                .name_token = name_token,
+                .name_node = name_node,
                 .value_node = @intCast(parser.nodes.len - 1),
             },
         },
@@ -505,6 +541,80 @@ fn parseEnumValueDecl(parser: *Parser) ParseError!u32 {
             .enum_value_decl = .{
                 .number_node = int_node,
                 .compact_options_node = 0,
+            },
+        },
+    });
+    return @intCast(parser.nodes.len - 1);
+}
+
+pub fn parseMessageLiteral(parser: *Parser) ParseError!u32 {
+    const initial_scratch_len = parser.scratch.items.len;
+    defer parser.scratch.items.len = initial_scratch_len;
+
+    while (true) {
+        switch (parser.token_tags[parser.token_index]) {
+            .identifier => {
+                const token = parser.nextToken();
+                try parser.nodes.append(parser.allocator, .{
+                    .tag = .qualified_identifier,
+                    .main_token = token,
+                    .data = .{ .qualified_identifier = token },
+                });
+            },
+            .l_bracket => {
+                parser.token_index += 1;
+                const qi_node = try parser.parseQualifiedIdentifier();
+
+                if (parser.eatToken(.slash)) |slash_token| {
+                    const qi_path_node = try parser.parseQualifiedIdentifier();
+
+                    try parser.nodes.append(parser.allocator, .{
+                        .tag = .type_url,
+                        .main_token = slash_token,
+                        .data = .{
+                            .type_url = .{
+                                .root_node = qi_node,
+                                .path_node = qi_path_node,
+                            },
+                        },
+                    });
+                }
+            },
+            else => break,
+        }
+
+        try parser.scratch.append(parser.allocator, @intCast(parser.nodes.len - 1));
+
+        if (parser.eatToken(.colon)) |_| {
+            try parser.scratch.append(parser.allocator, switch (parser.token_tags[parser.token_index]) {
+                .l_brace => b: {
+                    parser.token_index += 1;
+                    const lit = try parser.parseMessageLiteral();
+                    _ = try parser.expectToken(.r_brace);
+                    break :b lit;
+                },
+                else => try parser.parseScalarValue(),
+            });
+        } else {
+            try parser.scratch.append(parser.allocator, @intCast(parser.nodes.len - 1));
+        }
+
+        switch (parser.token_tags[parser.token_index]) {
+            .colon, .semicolon => parser.token_index += 1,
+            else => {},
+        }
+    }
+
+    const start_extra = parser.extra.items.len;
+    try parser.extra.appendSlice(parser.allocator, parser.scratch.items[initial_scratch_len..]);
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .message_literal,
+        .main_token = 0,
+        .data = .{
+            .children_in_extra = .{
+                .start = @intCast(start_extra),
+                .end = @intCast(parser.extra.items.len),
             },
         },
     });

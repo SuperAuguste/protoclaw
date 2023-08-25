@@ -4,6 +4,8 @@ package hello;
 
 import "swag.proto";
 
+option poggers = { name: "Bob Loblaw"; id: { a: 1 } };
+
 message Greeting {
     Kind kind = 1;
     Recipient recipient = 2;
