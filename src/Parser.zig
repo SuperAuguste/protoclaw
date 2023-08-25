@@ -296,13 +296,11 @@ fn parseScalarValue(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-/// Assumes option keyword has already been consumed
-/// TODO: Support MessageLiteralWithBraces
-fn parseOption(parser: *Parser, keyword_token: u32) ParseError!u32 {
-    // TODO: Parse names properly
-    const name_node = try parser.parseQualifiedIdentifier();
-    _ = try parser.expectToken(.equals);
+fn parseOptionName(parser: *Parser) ParseError!u32 {
+    _ = parser;
+}
 
+fn parseOptionValue(parser: *Parser) ParseError!u32 {
     switch (parser.token_tags[parser.token_index]) {
         .string_literal,
         .int_literal,
@@ -310,14 +308,23 @@ fn parseOption(parser: *Parser, keyword_token: u32) ParseError!u32 {
         .keyword_inf,
         .plus,
         .minus,
-        => _ = try parser.parseScalarValue(),
+        => _ = return parser.parseScalarValue(),
         .l_brace => {
             parser.token_index += 1;
-            _ = try parser.parseMessageLiteral();
+            const message_literal_node = try parser.parseMessageLiteral();
             _ = try parser.expectToken(.r_brace);
+            return message_literal_node;
         },
         else => return error.Invalid,
     }
+}
+
+/// Assumes option keyword has already been consumed
+/// TODO: Support MessageLiteralWithBraces
+fn parseOption(parser: *Parser, keyword_token: u32) ParseError!u32 {
+    const name_node = try parser.parseQualifiedIdentifier();
+    _ = try parser.expectToken(.equals);
+    const value_node = try parser.parseOptionValue();
 
     try parser.nodes.append(parser.allocator, .{
         .tag = .option,
@@ -325,7 +332,7 @@ fn parseOption(parser: *Parser, keyword_token: u32) ParseError!u32 {
         .data = .{
             .option = .{
                 .name_node = name_node,
-                .value_node = @intCast(parser.nodes.len - 1),
+                .value_node = value_node,
             },
         },
     });
@@ -593,10 +600,30 @@ pub fn parseMessageLiteral(parser: *Parser) ParseError!u32 {
                     _ = try parser.expectToken(.r_brace);
                     break :b lit;
                 },
+                .l_angle => b: {
+                    parser.token_index += 1;
+                    const lit = try parser.parseMessageLiteral();
+                    _ = try parser.expectToken(.r_angle);
+                    break :b lit;
+                },
                 else => try parser.parseScalarValue(),
             });
         } else {
-            try parser.scratch.append(parser.allocator, @intCast(parser.nodes.len - 1));
+            try parser.scratch.append(parser.allocator, switch (parser.token_tags[parser.token_index]) {
+                .l_brace => b: {
+                    parser.token_index += 1;
+                    const lit = try parser.parseMessageLiteral();
+                    _ = try parser.expectToken(.r_brace);
+                    break :b lit;
+                },
+                .l_angle => b: {
+                    parser.token_index += 1;
+                    const lit = try parser.parseMessageLiteral();
+                    _ = try parser.expectToken(.r_angle);
+                    break :b lit;
+                },
+                else => return error.Invalid,
+            });
         }
 
         switch (parser.token_tags[parser.token_index]) {
