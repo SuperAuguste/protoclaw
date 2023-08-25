@@ -21,7 +21,7 @@ extra: []const u32,
 
 pub fn getChildrenInExtra(ast: Ast, node: u32) []const u32 {
     switch (ast.node_tags[node]) {
-        .root, .message_decl, .enum_decl, .message_literal => {
+        .root, .message_decl, .enum_decl, .message_literal, .option_name => {
             const cie = ast.node_data[node].children_in_extra;
             return ast.extra[cie.start..cie.end];
         },
@@ -40,7 +40,7 @@ pub fn print(ast: Ast, writer: anytype, node: u32, depth: u32) @TypeOf(writer).E
     });
 
     switch (ast.node_tags[node]) {
-        .root, .message_decl, .enum_decl, .message_literal => {
+        .root, .message_decl, .enum_decl, .message_literal, .option_name => {
             const children = ast.getChildrenInExtra(node);
             for (children) |child| {
                 try ast.print(writer, child, depth + 1);

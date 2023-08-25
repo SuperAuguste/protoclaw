@@ -5,8 +5,8 @@ const Tokenizer = @import("Tokenizer.zig");
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    // var example = try std.fs.cwd().openFile("include/google/protobuf/descriptor.proto", .{});
-    var example = try std.fs.cwd().openFile("example/hello.proto", .{});
+    var example = try std.fs.cwd().openFile("include/google/protobuf/descriptor.proto", .{});
+    // var example = try std.fs.cwd().openFile("example/hello.proto", .{});
     defer example.close();
 
     const buf = try example.readToEndAlloc(allocator, std.math.maxInt(usize));

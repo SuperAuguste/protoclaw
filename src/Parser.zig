@@ -40,6 +40,8 @@ pub const Node = struct {
         /// if main_token is a dot, the qualified
         /// identifier is fully qualified
         qualified_identifier,
+        option_name,
+        extension_name,
 
         /// main_token is variant
         syntax,
@@ -108,6 +110,7 @@ pub const Node = struct {
         number_literal: Sign,
 
         qualified_identifier: u32,
+        extension_name: u32,
 
         import: ImportKind,
         package: u32,
@@ -246,7 +249,11 @@ fn parseFileElement(parser: *Parser) ParseError!?u32 {
             });
             return @intCast(parser.nodes.len - 1);
         },
-        .keyword_option => return try parser.parseOption(token),
+        .keyword_option => {
+            const option_node = try parser.parseOption(token);
+            _ = try parser.expectToken(.semicolon);
+            return option_node;
+        },
         .keyword_message => return try parser.parseMessageDecl(),
         .keyword_enum => return try parser.parseEnumDecl(),
         else => return null,
@@ -296,12 +303,65 @@ fn parseScalarValue(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
+fn parseExtensionName(parser: *Parser) ParseError!u32 {
+    const main_token = try parser.expectToken(.l_paren);
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .extension_name,
+        .main_token = main_token,
+        .data = .{ .extension_name = try parser.parseFullyQualifiedIdentifier() },
+    });
+    _ = try parser.expectToken(.r_paren);
+    return @intCast(parser.nodes.len - 1);
+}
+
 fn parseOptionName(parser: *Parser) ParseError!u32 {
-    _ = parser;
+    const initial_scratch_len = parser.scratch.items.len;
+    defer parser.scratch.items.len = initial_scratch_len;
+
+    while (true) {
+        try parser.scratch.append(parser.allocator, switch (parser.token_tags[parser.token_index]) {
+            .equals => break,
+            .l_paren => try parser.parseExtensionName(),
+            else => b: {
+                const fq_dot = parser.eatToken(.dot);
+                const first = try parser.expectToken(.identifier);
+                var last: u32 = first;
+
+                while (parser.eatToken(.dot)) |_|
+                    last = parser.eatToken(.identifier) orelse continue;
+
+                try parser.nodes.append(parser.allocator, .{
+                    .tag = .qualified_identifier,
+                    .main_token = fq_dot orelse first,
+                    .data = .{ .qualified_identifier = last },
+                });
+
+                break :b @intCast(parser.nodes.len - 1);
+            },
+        });
+
+        _ = parser.eatToken(.dot);
+    }
+
+    const start_extra = parser.extra.items.len;
+    try parser.extra.appendSlice(parser.allocator, parser.scratch.items[initial_scratch_len..]);
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .option_name,
+        .main_token = 0,
+        .data = .{
+            .children_in_extra = .{
+                .start = @intCast(start_extra),
+                .end = @intCast(parser.extra.items.len),
+            },
+        },
+    });
+    return @intCast(parser.nodes.len - 1);
 }
 
 fn parseOptionValue(parser: *Parser) ParseError!u32 {
     switch (parser.token_tags[parser.token_index]) {
+        .identifier,
         .string_literal,
         .int_literal,
         .float_literal,
@@ -321,14 +381,14 @@ fn parseOptionValue(parser: *Parser) ParseError!u32 {
 
 /// Assumes option keyword has already been consumed
 /// TODO: Support MessageLiteralWithBraces
-fn parseOption(parser: *Parser, keyword_token: u32) ParseError!u32 {
-    const name_node = try parser.parseQualifiedIdentifier();
+fn parseOption(parser: *Parser, first_token: u32) ParseError!u32 {
+    const name_node = try parser.parseOptionName();
     _ = try parser.expectToken(.equals);
     const value_node = try parser.parseOptionValue();
 
     try parser.nodes.append(parser.allocator, .{
         .tag = .option,
-        .main_token = keyword_token,
+        .main_token = first_token,
         .data = .{
             .option = .{
                 .name_node = name_node,
@@ -336,8 +396,6 @@ fn parseOption(parser: *Parser, keyword_token: u32) ParseError!u32 {
             },
         },
     });
-
-    _ = try parser.expectToken(.semicolon);
 
     return @intCast(parser.nodes.len - 1);
 }
@@ -352,6 +410,11 @@ fn parseMessageDecl(parser: *Parser) ParseError!u32 {
     while (true) {
         const token = parser.nextToken();
         try parser.scratch.append(parser.allocator, switch (parser.token_tags[token]) {
+            .keyword_option => b: {
+                const option_node = try parser.parseOption(token);
+                _ = try parser.expectToken(.semicolon);
+                break :b option_node;
+            },
             .keyword_message => try parser.parseMessageDecl(),
             .keyword_enum => try parser.parseEnumDecl(),
 
@@ -411,6 +474,11 @@ fn parseEnumDecl(parser: *Parser) ParseError!u32 {
     while (true) {
         const token = parser.nextToken();
         try parser.scratch.append(parser.allocator, switch (parser.token_tags[token]) {
+            .keyword_option => b: {
+                const option_node = try parser.parseOption(token);
+                _ = try parser.expectToken(.semicolon);
+                break :b option_node;
+            },
             .r_brace => break,
             .identifier => b: {
                 parser.token_index -= 1;
@@ -467,6 +535,58 @@ fn parseFullyQualifiedIdentifier(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
+fn expectIdentifierToken(parser: *Parser, comptime exclude: []const Token.Tag) ParseError!u32 {
+    const token_tag = parser.token_tags[parser.token_index];
+    inline for (exclude) |tag| {
+        if (token_tag == tag) return error.Invalid;
+    }
+
+    return switch (token_tag) {
+        .identifier,
+        .keyword_syntax,
+        .keyword_float,
+        .keyword_oneof,
+        .keyword_import,
+        .keyword_double,
+        .keyword_map,
+        .keyword_weak,
+        .keyword_int32,
+        .keyword_extensions,
+        .keyword_public,
+        .keyword_int64,
+        .keyword_to,
+        .keyword_package,
+        .keyword_uint32,
+        .keyword_max,
+        .keyword_option,
+        .keyword_uint64,
+        .keyword_reserved,
+        .keyword_inf,
+        .keyword_sint32,
+        .keyword_enum,
+        .keyword_repeated,
+        .keyword_sint64,
+        .keyword_message,
+        .keyword_optional,
+        .keyword_fixed32,
+        .keyword_extend,
+        .keyword_required,
+        .keyword_fixed64,
+        .keyword_service,
+        .keyword_bool,
+        .keyword_sfixed32,
+        .keyword_rpc,
+        .keyword_string,
+        .keyword_sfixed64,
+        .keyword_stream,
+        .keyword_bytes,
+        .keyword_group,
+        .keyword_returns,
+        => parser.nextToken(),
+        else => error.Invalid,
+    };
+}
+
 /// TODO: Support compact options
 fn parseMessageFieldDecl(parser: *Parser) ParseError!u32 {
     switch (parser.token_tags[parser.token_index]) {
@@ -506,10 +626,17 @@ fn parseMessageFieldDecl(parser: *Parser) ParseError!u32 {
         },
         else => return error.Invalid,
     };
-    const main_token = try parser.expectToken(.identifier);
+    const main_token = try parser.expectIdentifierToken(&.{});
 
     _ = try parser.expectToken(.equals);
     _ = try parser.expectToken(.int_literal);
+
+    const compact_options_node = if (parser.eatToken(.l_bracket)) |bracket_token| b: {
+        const option_node = try parser.parseOption(bracket_token);
+        _ = try parser.expectToken(.r_bracket);
+        break :b option_node;
+    } else 0;
+
     _ = try parser.expectToken(.semicolon);
 
     try parser.nodes.append(parser.allocator, .{
@@ -518,7 +645,7 @@ fn parseMessageFieldDecl(parser: *Parser) ParseError!u32 {
         .data = .{
             .message_field_decl = .{
                 .type_name_node = type_name_node,
-                .compact_options_node = 0,
+                .compact_options_node = compact_options_node,
             },
         },
     });
@@ -527,7 +654,7 @@ fn parseMessageFieldDecl(parser: *Parser) ParseError!u32 {
 
 /// TODO: Support compact options
 fn parseEnumValueDecl(parser: *Parser) ParseError!u32 {
-    const main_token = try parser.expectToken(.identifier);
+    const main_token = try parser.expectIdentifierToken(&.{ .keyword_option, .keyword_reserved });
 
     _ = try parser.expectToken(.equals);
     const sign: Node.Data.Sign = if (parser.eatToken(.minus)) |_| .negative else .positive;

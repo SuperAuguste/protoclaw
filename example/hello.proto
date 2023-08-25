@@ -4,13 +4,17 @@ package hello;
 
 import "swag.proto";
 
-// option (.a).(a) = 10;
+option (.a.a).a.(a).(.c.c).b = 10;
 
 message Greeting {
-    Kind kind = 1;
+    option (.a.a).a.(a).(.c.c).b = 10;
+
+    Kind kind = 1 [deprecated=true];
     Recipient recipient = 2;
     
     enum Kind {
+        option (.a.a).a.(a).(.c.c).b = 10;
+
         Formal = 0;
         Informal = 1;
     }
