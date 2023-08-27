@@ -2,18 +2,22 @@ syntax = "proto3";
 
 package hello;
 
-import "swag.proto";
+import "pog/swag.proto";
 
-option (.a.a).a.(a).(.c.c).b = 10;
+// option (.a.a).a.(a).(.c.c).b = 10;
 
 message Greeting {
-    option (.a.a).a.(a).(.c.c).b = 10;
+    // option (.a.a).a.(a).(.c.c).b = 10;
 
     Kind kind = 1 [deprecated=true];
     Recipient recipient = 2;
+
+    Greeting.Kind anotherKind = 3;
+    hello.Greeting.Kind anotherKind2 = 4;
+    .hello.Greeting.Kind anotherKind3 = 5;
     
     enum Kind {
-        option (.a.a).a.(a).(.c.c).b = 10;
+        // option (.a.a).a.(a).(.c.c).b = 10;
 
         Formal = 0;
         Informal = 1;

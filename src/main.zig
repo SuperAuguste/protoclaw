@@ -1,29 +1,35 @@
 const std = @import("std");
 const Parser = @import("Parser.zig");
 const Tokenizer = @import("Tokenizer.zig");
+const DocumentStore = @import("DocumentStore.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    var example = try std.fs.cwd().openFile("include/google/protobuf/descriptor.proto", .{});
-    // var example = try std.fs.cwd().openFile("example/hello.proto", .{});
-    defer example.close();
+    var store = DocumentStore{ .allocator = allocator };
 
-    const buf = try example.readToEndAlloc(allocator, std.math.maxInt(usize));
-    defer allocator.free(buf);
+    try store.addIncludePath("example");
+    try store.analyze();
 
-    var tokenizer = Tokenizer{};
-    try tokenizer.tokenize(allocator, buf);
+    // std.log.info("{any}", .{store.import_path_to_document.get("pog/swag.proto")});
 
-    var parser = Parser.init(allocator, buf, tokenizer.tokens.slice());
-    const ast = parser.parse() catch |err| {
-        const token = parser.token_index;
-        const start = parser.token_starts[token];
-        const end = parser.token_ends[token];
+    // const hello = try std.fs.cwd().readFileAlloc(allocator, "example/hello.proto", std.math.maxInt(usize));
+    // defer allocator.free(hello);
+    // const swag = try std.fs.cwd().readFileAlloc(allocator, "example/swag.proto", std.math.maxInt(usize));
+    // defer allocator.free(swag);
 
-        std.log.err("{d}: {s}", .{ start, parser.source[start..end] });
-        return err;
-    };
+    // var tokenizer = Tokenizer{};
+    // try tokenizer.tokenize(allocator, buf);
 
-    try ast.print(std.io.getStdErr().writer(), 0, 0);
+    // var parser = Parser.init(allocator, buf, tokenizer.tokens.slice());
+    // const ast = parser.parse() catch |err| {
+    //     const token = parser.token_index;
+    //     const start = parser.token_starts[token];
+    //     const end = parser.token_ends[token];
+
+    //     std.log.err("{d}: {s}", .{ start, parser.source[start..end] });
+    //     return err;
+    // };
+
+    // try ast.print(std.io.getStdErr().writer(), 0, 0);
 }

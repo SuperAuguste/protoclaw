@@ -29,6 +29,15 @@ pub fn getChildrenInExtra(ast: Ast, node: u32) []const u32 {
     }
 }
 
+pub fn tokenSlice(ast: Ast, token: u32) []const u8 {
+    return ast.source[ast.token_starts[token]..ast.token_ends[token]];
+}
+
+pub fn qualifiedIdentifierSlice(ast: Ast, node: u32) []const u8 {
+    std.debug.assert(ast.node_tags[node] == .qualified_identifier);
+    return ast.source[ast.token_starts[ast.node_main_tokens[node]]..ast.token_ends[ast.node_data[node].qualified_identifier]];
+}
+
 pub fn print(ast: Ast, writer: anytype, node: u32, depth: u32) @TypeOf(writer).Error!void {
     try writer.writeByteNTimes(' ', depth * 4);
     try writer.print("{s} (main token: {s})\n", .{

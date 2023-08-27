@@ -61,8 +61,8 @@ pub const Node = struct {
 
         /// main_token is field name
         ///
-        /// cardinality (required/optional/repeated) is type_name_node - 1
-        /// field number is type_name_node + 1
+        /// cardinality (required/optional/repeated) is main_tokens[type_name_node] - 1
+        /// field number is main_tokens[message_field_decl] + 2
         message_field_decl,
         /// main_token is value name
         enum_value_decl,
@@ -166,7 +166,7 @@ fn expectToken(parser: *Parser, tag: Token.Tag) ParseError!u32 {
     return parser.nextToken();
 }
 
-const ParseError = std.mem.Allocator.Error || error{Invalid};
+pub const ParseError = std.mem.Allocator.Error || error{Invalid};
 pub fn parse(parser: *Parser) ParseError!Ast {
     const initial_scratch_len = parser.scratch.items.len;
     defer parser.scratch.items.len = initial_scratch_len;
