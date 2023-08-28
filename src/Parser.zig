@@ -58,6 +58,8 @@ pub const Node = struct {
         message_decl,
         /// main_token is enum name
         enum_decl,
+        /// main_token is service name
+        service_decl,
 
         /// main_token is field name
         ///
@@ -72,9 +74,9 @@ pub const Node = struct {
     };
 
     pub const Data = packed union {
-        pub const Sign = enum(u64) {
-            positive,
-            negative,
+        pub const Sign = enum(i64) {
+            positive = 1,
+            negative = -1,
         };
 
         pub const ImportKind = enum(u32) {
@@ -267,6 +269,7 @@ fn parseFileElement(parser: *Parser) ParseError!u32 {
             return option_node;
         },
         .keyword_message => return try parser.parseMessageDecl(),
+        .keyword_service => return try parser.parseServiceDecl(),
         .keyword_enum => return try parser.parseEnumDecl(),
         else => return error.Invalid,
     }
@@ -416,7 +419,7 @@ fn parseMessageDecl(parser: *Parser) ParseError!u32 {
     defer parser.scratch.items.len = initial_scratch_len;
 
     _ = try parser.expectToken(.keyword_message);
-    const main_token = try parser.expectToken(.identifier);
+    const main_token = try parser.expectIdentifierToken(&.{});
     _ = try parser.expectToken(.l_brace);
 
     while (true) {
@@ -483,7 +486,7 @@ fn parseEnumDecl(parser: *Parser) ParseError!u32 {
     defer parser.scratch.items.len = initial_scratch_len;
 
     _ = try parser.expectToken(.keyword_enum);
-    const main_token = try parser.expectToken(.identifier);
+    const main_token = try parser.expectIdentifierToken(&.{});
     _ = try parser.expectToken(.l_brace);
 
     while (true) {
@@ -516,6 +519,69 @@ fn parseEnumDecl(parser: *Parser) ParseError!u32 {
         },
     });
     return @intCast(parser.nodes.len - 1);
+}
+
+/// TODO: Implement services
+fn parseServiceDecl(parser: *Parser) ParseError!u32 {
+    _ = try parser.expectToken(.keyword_service);
+    _ = try parser.expectIdentifierToken(&.{});
+    _ = try parser.expectToken(.l_brace);
+
+    while (true) {
+        switch (parser.token_tags[parser.token_index]) {
+            .keyword_option => {
+                _ = try parser.parseOption(parser.nextToken());
+                _ = try parser.expectToken(.semicolon);
+            },
+            .keyword_rpc => {
+                try parser.parseMethodDecl();
+            },
+            .r_brace => {
+                parser.token_index += 1;
+                break;
+            },
+            else => return error.Invalid,
+        }
+    }
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .service_decl,
+        .main_token = 0,
+        .data = .{ .none = void{} },
+    });
+    return @intCast(parser.nodes.len - 1);
+}
+
+fn parseMethodDecl(parser: *Parser) ParseError!void {
+    _ = try parser.expectToken(.keyword_rpc);
+    _ = try parser.expectIdentifierToken(&.{});
+    _ = try parser.parseMessageType();
+    _ = try parser.expectToken(.keyword_returns);
+    _ = try parser.parseMessageType();
+
+    switch (parser.token_tags[parser.nextToken()]) {
+        .semicolon => {},
+        .l_brace => {
+            while (true) {
+                switch (parser.token_tags[parser.nextToken()]) {
+                    .keyword_option => {
+                        _ = try parser.parseOption(parser.nextToken());
+                        _ = try parser.expectToken(.semicolon);
+                    },
+                    .r_brace => break,
+                    else => return error.Invalid,
+                }
+            }
+        },
+        else => return error.Invalid,
+    }
+}
+
+fn parseMessageType(parser: *Parser) ParseError!void {
+    _ = try parser.expectToken(.l_paren);
+    _ = parser.eatToken(.keyword_stream);
+    _ = try parser.parseFullyQualifiedIdentifier();
+    _ = try parser.expectToken(.r_paren);
 }
 
 /// Fix invalid parse (,)

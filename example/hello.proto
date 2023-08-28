@@ -26,6 +26,6 @@ message Greeting {
     message Recipient {
         string name = 1;
         int64 coolness_percent = 2;
-        Swag swag = 3;
+        pog.Swag swag = 3;
     }
 }

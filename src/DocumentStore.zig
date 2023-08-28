@@ -6,7 +6,7 @@ const Analyzer = @import("Analyzer.zig");
 
 const DocumentStore = @This();
 
-const Document = struct {
+pub const Document = struct {
     include_path: u32,
     import_path: []const u8,
     source: []const u8,
@@ -15,11 +15,18 @@ const Document = struct {
     analyzer: Analyzer,
 };
 
+pub const Packages = struct {
+    documents: std.ArrayListUnmanaged(u32) = .{},
+    subpackages: PackageMap = .{},
+};
+pub const PackageMap = std.StringArrayHashMapUnmanaged(*Packages);
+
 allocator: std.mem.Allocator,
 include_paths: std.ArrayListUnmanaged([]const u8) = .{},
 documents: std.MultiArrayList(Document) = .{},
 /// Used to resolve import
 import_path_to_document: std.StringHashMapUnmanaged(u32) = .{},
+packages: *Packages,
 
 pub const AddIncludePathError =
     std.mem.Allocator.Error ||
@@ -29,6 +36,14 @@ pub const AddIncludePathError =
     std.fs.File.SeekError ||
     Parser.ParseError ||
     error{IncludePathConflict};
+
+pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*DocumentStore {
+    var store = try allocator.create(DocumentStore);
+    var packages = try allocator.create(Packages);
+    packages.* = .{};
+    store.* = .{ .allocator = allocator, .packages = packages };
+    return store;
+}
 
 pub fn addIncludePath(store: *DocumentStore, path: []const u8) AddIncludePathError!void {
     var dir = try std.fs.cwd().openIterableDir(path, .{});
@@ -40,7 +55,7 @@ pub fn addIncludePath(store: *DocumentStore, path: []const u8) AddIncludePathErr
     defer walker.deinit();
 
     while (try walker.next()) |entry| {
-        if (entry.kind != .file)
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".proto"))
             continue;
 
         const import_path = try store.allocator.dupe(u8, entry.path);
@@ -78,6 +93,7 @@ pub fn addIncludePath(store: *DocumentStore, path: []const u8) AddIncludePathErr
             .analyzer = .{
                 .allocator = store.allocator,
                 .store = store,
+                .document = @intCast(store.documents.len),
             },
         });
 
@@ -92,5 +108,31 @@ pub fn analyze(store: *DocumentStore) !void {
 
     for (asts, analyzers) |ast, *analyzer| {
         try analyzer.walk(&ast);
+    }
+
+    for (analyzers) |*analyzer| {
+        try analyzer.analyze();
+    }
+}
+
+pub fn emit(store: *DocumentStore, writer: anytype) !void {
+    try store.emitInternal(writer, store.packages);
+}
+
+fn emitInternal(store: *DocumentStore, writer: anytype, packages: *Packages) !void {
+    const slice = packages.subpackages.entries.slice();
+    const keys = slice.items(.key);
+    const values = slice.items(.value);
+
+    var doc_slice = store.documents.slice();
+    var analyzers = doc_slice.items(.analyzer);
+
+    for (keys, values) |key, value| {
+        try writer.print("pub const {} = struct {{\n", .{std.zig.fmtId(key)});
+        try store.emitInternal(writer, value);
+        for (value.documents.items) |document| {
+            try analyzers[document].emit(writer);
+        }
+        try writer.writeAll("};\n\n");
     }
 }

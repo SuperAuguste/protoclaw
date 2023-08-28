@@ -30,6 +30,8 @@ https://protobuf.com/docs/language-spec
 https://protobuf.dev/reference/protobuf/proto2-spec/
 https://protobuf.dev/reference/protobuf/proto3-spec/
 
+protoc .\example\hello.proto -Iexample --cpp_out=protoc-runs
+
 ## License
 
 MIT except for all files in `include/`, which are licensed under Protobuf's BSD license, which is can be found at the start of those files or [here](https://github.com/protocolbuffers/protobuf/blob/main/LICENSE).

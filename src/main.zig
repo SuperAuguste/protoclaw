@@ -5,31 +5,23 @@ const DocumentStore = @import("DocumentStore.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
+    var store = try DocumentStore.create(allocator);
 
-    var store = DocumentStore{ .allocator = allocator };
-
-    try store.addIncludePath("example");
+    // try store.addIncludePath("example");
+    try store.addIncludePath("C:/Programming/Zig/opentelemetry-proto/opentelemetry/proto");
     try store.analyze();
 
-    // std.log.info("{any}", .{store.import_path_to_document.get("pog/swag.proto")});
+    var list = std.ArrayList(u8).init(allocator);
+    try store.emit(list.writer());
 
-    // const hello = try std.fs.cwd().readFileAlloc(allocator, "example/hello.proto", std.math.maxInt(usize));
-    // defer allocator.free(hello);
-    // const swag = try std.fs.cwd().readFileAlloc(allocator, "example/swag.proto", std.math.maxInt(usize));
-    // defer allocator.free(swag);
+    const sentineled = try list.toOwnedSliceSentinel(0);
+    defer allocator.free(sentineled);
 
-    // var tokenizer = Tokenizer{};
-    // try tokenizer.tokenize(allocator, buf);
+    var ast = try std.zig.Ast.parse(allocator, sentineled, .zig);
+    defer ast.deinit(allocator);
 
-    // var parser = Parser.init(allocator, buf, tokenizer.tokens.slice());
-    // const ast = parser.parse() catch |err| {
-    //     const token = parser.token_index;
-    //     const start = parser.token_starts[token];
-    //     const end = parser.token_ends[token];
+    const rendered = try ast.render(allocator);
+    defer allocator.free(rendered);
 
-    //     std.log.err("{d}: {s}", .{ start, parser.source[start..end] });
-    //     return err;
-    // };
-
-    // try ast.print(std.io.getStdErr().writer(), 0, 0);
+    try std.fs.cwd().writeFile("example/example.zig", rendered);
 }
