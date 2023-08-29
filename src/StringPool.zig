@@ -6,7 +6,7 @@ allocator: std.mem.Allocator,
 map: std.StringArrayHashMapUnmanaged(u16) = .{},
 
 pub fn get(pool: StringPool, index: u32) []const u8 {
-    return pool.map.values()[index];
+    return pool.map.keys()[index];
 }
 
 /// Stores string in pool, returns index

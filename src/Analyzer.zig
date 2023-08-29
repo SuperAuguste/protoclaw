@@ -80,10 +80,13 @@ pub const Decl = struct {
         };
 
         pub const MessageFieldDecl = extern struct {
+            pub const Cardinality = enum(u8) { required, optional, repeated };
+
             parent: u32,
             name: u32,
 
             type: u32,
+            cardinality: Cardinality,
             field_number: u64,
         };
 
@@ -257,6 +260,12 @@ pub fn walkMessageFieldDecl(
 
     const name = ast.tokenSlice(ast.node_main_tokens[node]);
     const data = ast.node_data[node].message_field_decl;
+    const cardinality: Decl.Extra.MessageFieldDecl.Cardinality = switch (ast.token_tags[ast.node_main_tokens[data.type_name_node] - 1]) {
+        .keyword_required => .required,
+        .keyword_optional => .optional,
+        .keyword_repeated => .repeated,
+        else => .required,
+    };
 
     return try analyzer.appendDecl(.message_field_decl, .{
         .parent = parent,
@@ -277,6 +286,7 @@ pub fn walkMessageFieldDecl(
             },
             else => unreachable,
         }),
+        .cardinality = cardinality,
         // TODO: Parse all int types properly
         .field_number = try std.fmt.parseUnsigned(u64, ast.tokenSlice(ast.node_main_tokens[node] + 2), 10),
     });
@@ -349,61 +359,147 @@ pub fn EmitError(comptime Writer: type) type {
 }
 
 pub fn emit(analyzer: *Analyzer, writer: anytype) EmitError(@TypeOf(writer))!void {
-    _ = analyzer;
-    // for (analyzer.top_level_decls.entries.items(.value)) |value| {
-    //     switch (value.which) {
-    //         .message => try analyzer.emitMessage(writer, value.index),
-    //         .@"enum" => try analyzer.emitEnum(writer, value.index),
-    //     }
-    // }
+    const children = analyzer.extraData(.root, 0).children;
+    const tags = analyzer.decls.items(.tag);
+
+    for (analyzer.extra.items[children.start..children.end]) |child| {
+        switch (tags[child]) {
+            .message_decl => try analyzer.emitMessage(writer, child),
+            .enum_decl => try analyzer.emitEnum(writer, child),
+            else => {},
+        }
+    }
+}
+
+fn typeToTypeString(analyzer: *Analyzer, @"type": u32) []const u8 {
+    const type_data = analyzer.extraData(.type, @"type");
+    return switch (type_data.tag) {
+        .builtin => switch (type_data.payload.builtin) {
+            .keyword_int32 => "i32",
+            .keyword_sint32 => "i32",
+            .keyword_sfixed32 => "i32",
+            .keyword_int64 => "i64",
+            .keyword_sint64 => "i64",
+            .keyword_sfixed64 => "i64",
+            .keyword_uint32 => "u32",
+            .keyword_fixed32 => "u32",
+            .keyword_uint64 => "u64",
+            .keyword_fixed64 => "u64",
+            .keyword_float => "f32",
+            .keyword_double => "f64",
+            .keyword_bool => "bool",
+            .keyword_string => "[]const u8",
+            .keyword_bytes => "[]const u8",
+            else => unreachable,
+        },
+        .unresolved => analyzer.string_pool.get(type_data.payload.unresolved),
+        .resolved => "TODO",
+    };
+}
+
+fn typeToDefaultString(analyzer: *Analyzer, @"type": u32) []const u8 {
+    const type_data = analyzer.extraData(.type, @"type");
+    return switch (type_data.tag) {
+        .builtin => switch (type_data.payload.builtin) {
+            .keyword_int32 => "0",
+            .keyword_sint32 => "0",
+            .keyword_sfixed32 => "0",
+            .keyword_int64 => "0",
+            .keyword_sint64 => "0",
+            .keyword_sfixed64 => "0",
+            .keyword_uint32 => "0",
+            .keyword_fixed32 => "0",
+            .keyword_uint64 => "0",
+            .keyword_fixed64 => "0",
+            .keyword_float => "0",
+            .keyword_double => "0",
+            .keyword_bool => "false",
+            .keyword_string => "\"\"",
+            .keyword_bytes => "\"\"",
+            else => unreachable,
+        },
+        .unresolved => ".{}",
+        .resolved => "TODO",
+    };
 }
 
 fn emitMessage(analyzer: *Analyzer, writer: anytype, message: u32) EmitError(@TypeOf(writer))!void {
-    const slice = analyzer.message_decls.slice();
-    const name = slice.items(.name)[message];
-    const field_decls = slice.items(.field_decls)[message];
-    const message_decls = slice.items(.message_decls)[message];
-    const enum_decls = slice.items(.enum_decls)[message];
+    const tags = analyzer.decls.items(.tag);
+    const message_data = analyzer.extraData(.message_decl, message);
 
-    const message_field_decls_slice = analyzer.message_field_decls.slice();
-    const field_names = message_field_decls_slice.items(.name);
-    const field_numbers = message_field_decls_slice.items(.field_number);
-    const field_types = message_field_decls_slice.items(.type);
-
-    try writer.print("pub const {} = struct {{\n", .{std.zig.fmtId(name)});
+    try writer.print("pub const {} = struct {{\n", .{std.zig.fmtId(analyzer.string_pool.get(message_data.name))});
 
     try writer.print("pub const protobuf_metadata = .{{.syntax = .{s},", .{@tagName(analyzer.syntax)});
     try writer.writeAll(".field_numbers = .{");
-    for (field_decls.entries.items(.value)) |field_decl| {
-        try writer.print(".{} = {d},\n", .{ std.zig.fmtId(field_names[field_decl]), field_numbers[field_decl] });
+    // TODO: Get rid of these heartbreaking repeating loops :/
+    // Emission buffers? Secondary data?
+    for (analyzer.extra.items[message_data.children.start..message_data.children.end]) |field| {
+        if (tags[field] != .message_field_decl) continue;
+
+        const field_data = analyzer.extraData(.message_field_decl, field);
+        try writer.print(".{} = {d},\n", .{
+            std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
+            field_data.field_number,
+        });
     }
     try writer.writeAll("},");
     try writer.writeAll("};\n\n");
 
-    for (message_decls.entries.items(.value)) |index| try analyzer.emitMessage(writer, index);
-    for (enum_decls.entries.items(.value)) |index| try analyzer.emitEnum(writer, index);
+    // for (message_decls.entries.items(.value)) |index| try analyzer.emitMessage(writer, index);
+    // for (enum_decls.entries.items(.value)) |index| try analyzer.emitEnum(writer, index);
 
-    for (field_decls.entries.items(.value)) |field_decl| {
-        try writer.print("{}: {s},\n", .{ std.zig.fmtId(field_names[field_decl]), field_types[field_decl] });
+    for (analyzer.extra.items[message_data.children.start..message_data.children.end]) |child| {
+        switch (tags[child]) {
+            .message_decl => try analyzer.emitMessage(writer, child),
+            .enum_decl => try analyzer.emitEnum(writer, child),
+            else => {},
+        }
+    }
+
+    // for (field_decls.entries.items(.value)) |field_decl| {
+    //     try writer.print("{}: {s},\n", .{ std.zig.fmtId(field_names[field_decl]), field_types[field_decl] });
+    // }
+
+    for (analyzer.extra.items[message_data.children.start..message_data.children.end]) |field| {
+        if (tags[field] != .message_field_decl) continue;
+
+        const field_data = analyzer.extraData(.message_field_decl, field);
+
+        switch (field_data.cardinality) {
+            .required => {
+                try writer.print("{}: {s} = {s},\n", .{
+                    std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
+                    analyzer.typeToTypeString(field_data.type),
+                    analyzer.typeToDefaultString(field_data.type),
+                });
+            },
+            .optional => {
+                try writer.print("{}: ?{s} = null,\n", .{
+                    std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
+                    analyzer.typeToTypeString(field_data.type),
+                });
+            },
+            .repeated => {
+                try writer.print("{}: std.ArrayListUnmanaged({s}) = .{{}},\n", .{
+                    std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
+                    analyzer.typeToTypeString(field_data.type),
+                });
+            },
+        }
     }
 
     try writer.writeAll("};\n\n");
 }
 
 fn emitEnum(analyzer: *Analyzer, writer: anytype, @"enum": u32) EmitError(@TypeOf(writer))!void {
-    const slice = analyzer.enum_decls.slice();
-    const name = slice.items(.name)[@"enum"];
-    const value_decls = slice.items(.value_decls)[@"enum"];
+    const enum_data = analyzer.extraData(.enum_decl, @"enum");
 
-    const enum_value_decls_slice = analyzer.enum_value_decls.slice();
-    const value_names = enum_value_decls_slice.items(.name);
-    const value_values = enum_value_decls_slice.items(.value);
-
-    try writer.print("pub const {} = enum(i64) {{\n", .{std.zig.fmtId(name)});
+    try writer.print("pub const {} = enum(i64) {{\n", .{std.zig.fmtId(analyzer.string_pool.get(enum_data.name))});
     try writer.print("pub const protobuf_metadata = .{{.syntax = .{s},}};\n\n", .{@tagName(analyzer.syntax)});
 
-    for (value_decls.entries.items(.value)) |value_decl| {
-        try writer.print("{} = {d},\n", .{ std.zig.fmtId(value_names[value_decl]), value_values[value_decl] });
+    for (analyzer.extra.items[enum_data.children.start..enum_data.children.end]) |value| {
+        const enum_value_data = analyzer.extraData(.enum_value_decl, value);
+        try writer.print("{} = {d},\n", .{ std.zig.fmtId(analyzer.string_pool.get(enum_value_data.name)), enum_value_data.value });
     }
     try writer.writeAll("};\n\n");
 }

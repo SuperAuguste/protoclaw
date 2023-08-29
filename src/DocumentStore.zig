@@ -121,6 +121,7 @@ pub fn analyze(store: *DocumentStore) !void {
 }
 
 pub fn emit(store: *DocumentStore, writer: anytype) !void {
+    try writer.writeAll("const std = @import(\"std\");\n\n");
     try store.emitInternal(writer, store.packages);
 }
 
