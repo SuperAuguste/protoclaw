@@ -8,7 +8,7 @@ pub fn main() !void {
     var store = try DocumentStore.create(allocator);
 
     // try store.addIncludePath("example");
-    try store.addIncludePath("C:/Programming/Zig/opentelemetry-proto/opentelemetry/proto");
+    try store.addIncludePath("/Users/auguste.rame/Documents/Repos/opentelemetry-proto");
     try store.analyze();
 
     var list = std.ArrayList(u8).init(allocator);

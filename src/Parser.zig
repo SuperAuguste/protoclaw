@@ -61,6 +61,8 @@ pub const Node = struct {
         /// main_token is service name
         service_decl,
 
+        oneof_decl,
+
         /// main_token is field name
         ///
         /// cardinality (required/optional/repeated) is main_tokens[type_name_node] - 1
@@ -454,7 +456,13 @@ fn parseMessageDecl(parser: *Parser) ParseError!u32 {
             .keyword_bool,
             .keyword_string,
             .keyword_bytes,
-            => try parser.parseMessageFieldDecl(),
+            => try parser.parseMessageFieldDecl(.message),
+
+            .semicolon => {
+                parser.token_index += 1;
+                continue;
+            },
+            .keyword_oneof => try parser.parseOneofDecl(),
 
             .r_brace => {
                 parser.token_index += 1;
@@ -497,6 +505,10 @@ fn parseEnumDecl(parser: *Parser) ParseError!u32 {
                 break :b option_node;
             },
             .identifier => try parser.parseEnumValueDecl(),
+            .semicolon => {
+                parser.token_index += 1;
+                continue;
+            },
             .r_brace => {
                 parser.token_index += 1;
                 break;
@@ -726,12 +738,16 @@ fn expectIdentifierToken(parser: *Parser, comptime exclude: []const Token.Tag) P
 }
 
 /// TODO: Support compact options
-fn parseMessageFieldDecl(parser: *Parser) ParseError!u32 {
+fn parseMessageFieldDecl(parser: *Parser, where: enum { message, oneof }) ParseError!u32 {
     switch (parser.token_tags[parser.token_index]) {
         .keyword_required,
         .keyword_optional,
         .keyword_repeated,
         => {
+            if (where == .oneof) {
+                return error.Invalid;
+            }
+
             parser.token_index += 1;
         },
         else => {},
@@ -784,6 +800,71 @@ fn parseMessageFieldDecl(parser: *Parser) ParseError!u32 {
             .message_field_decl = .{
                 .type_name_node = type_name_node,
                 .compact_options_node = compact_options_node,
+            },
+        },
+    });
+    return @intCast(parser.nodes.len - 1);
+}
+
+pub fn parseOneofDecl(parser: *Parser) ParseError!u32 {
+    const initial_scratch_len = parser.scratch.items.len;
+    defer parser.scratch.items.len = initial_scratch_len;
+
+    _ = try parser.expectToken(.keyword_oneof);
+    const main_token = try parser.expectIdentifierToken(&.{});
+    _ = try parser.expectToken(.l_brace);
+
+    while (true) {
+        try parser.scratch.append(parser.allocator, switch (parser.token_tags[parser.token_index]) {
+            .keyword_option => b: {
+                const option_node = try parser.parseOption(parser.nextToken());
+                _ = try parser.expectToken(.semicolon);
+                break :b option_node;
+            },
+
+            .dot,
+            .identifier,
+            .keyword_int32,
+            .keyword_sint32,
+            .keyword_sfixed32,
+            .keyword_int64,
+            .keyword_sint64,
+            .keyword_sfixed64,
+            .keyword_uint32,
+            .keyword_fixed32,
+            .keyword_uint64,
+            .keyword_fixed64,
+            .keyword_float,
+            .keyword_double,
+            .keyword_bool,
+            .keyword_string,
+            .keyword_bytes,
+            => try parser.parseMessageFieldDecl(.oneof),
+
+            .semicolon => {
+                parser.token_index += 1;
+                continue;
+            },
+
+            .r_brace => {
+                parser.token_index += 1;
+                break;
+            },
+
+            else => return error.Invalid,
+        });
+    }
+
+    const start_extra = parser.extra.items.len;
+    try parser.extra.appendSlice(parser.allocator, parser.scratch.items[initial_scratch_len..]);
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .oneof_decl,
+        .main_token = main_token,
+        .data = .{
+            .children_in_extra = .{
+                .start = @intCast(start_extra),
+                .end = @intCast(parser.extra.items.len),
             },
         },
     });
@@ -892,7 +973,10 @@ fn parseMessageLiteral(parser: *Parser) ParseError!u32 {
         }
 
         switch (parser.token_tags[parser.token_index]) {
-            .colon, .semicolon => parser.token_index += 1,
+            .colon, .semicolon => {
+                parser.token_index += 1;
+                continue;
+            },
             else => {},
         }
     }

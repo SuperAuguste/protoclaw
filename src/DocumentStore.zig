@@ -3,6 +3,7 @@ const Tokenizer = @import("Tokenizer.zig");
 const Parser = @import("Parser.zig");
 const Ast = @import("Ast.zig");
 const Analyzer = @import("Analyzer.zig");
+const StringPool = @import("StringPool.zig");
 
 const DocumentStore = @This();
 
@@ -22,6 +23,7 @@ pub const Packages = struct {
 pub const PackageMap = std.StringArrayHashMapUnmanaged(*Packages);
 
 allocator: std.mem.Allocator,
+string_pool: StringPool,
 include_paths: std.ArrayListUnmanaged([]const u8) = .{},
 documents: std.MultiArrayList(Document) = .{},
 /// Used to resolve import
@@ -41,7 +43,7 @@ pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*DocumentSto
     var store = try allocator.create(DocumentStore);
     var packages = try allocator.create(Packages);
     packages.* = .{};
-    store.* = .{ .allocator = allocator, .packages = packages };
+    store.* = .{ .allocator = allocator, .string_pool = .{ .allocator = allocator }, .packages = packages };
     return store;
 }
 
@@ -69,6 +71,8 @@ pub fn addIncludePath(store: *DocumentStore, path: []const u8) AddIncludePathErr
             return error.IncludePathConflict;
         }
 
+        std.log.debug("Processing file {s}/{s}", .{ path, entry.path });
+
         const source = try entry.dir.readFileAlloc(store.allocator, entry.basename, std.math.maxInt(usize));
 
         var tokenizer = Tokenizer{};
@@ -93,6 +97,7 @@ pub fn addIncludePath(store: *DocumentStore, path: []const u8) AddIncludePathErr
             .analyzer = .{
                 .allocator = store.allocator,
                 .store = store,
+                .string_pool = &store.string_pool,
                 .document = @intCast(store.documents.len),
             },
         });

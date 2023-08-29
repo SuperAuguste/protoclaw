@@ -1,54 +1,37 @@
-pub const hello = struct {
-    pub const pog = struct {
-        pub const Variant = enum(i64) {
-            pub const protobuf_metadata = .{
-                .syntax = .proto3,
+pub const opentelemetry = struct {
+    pub const proto = struct {
+        pub const metrics = struct {
+            pub const v1 = struct {};
+        };
+
+        pub const trace = struct {
+            pub const v1 = struct {};
+        };
+
+        pub const collector = struct {
+            pub const metrics = struct {
+                pub const v1 = struct {};
             };
 
-            Cool = 0,
-            Awesome = 1,
-        };
-
-        pub const Swag = struct {
-            pub const protobuf_metadata = .{
-                .syntax = .proto3,
-                .field_numbers = .{
-                    .variant = 1,
-                },
+            pub const trace = struct {
+                pub const v1 = struct {};
             };
-        };
-    };
 
-    pub const Greeting = struct {
-        pub const protobuf_metadata = .{
-            .syntax = .proto3,
-            .field_numbers = .{
-                .kind = 1,
-                .recipient = 2,
-                .anotherKind = 3,
-                .anotherKind2 = 4,
-                .anotherKind3 = 5,
-            },
-        };
-
-        pub const Recipient = struct {
-            pub const protobuf_metadata = .{
-                .syntax = .proto3,
-                .field_numbers = .{
-                    .name = 1,
-                    .coolness_percent = 2,
-                    .swag = 3,
-                },
+            pub const logs = struct {
+                pub const v1 = struct {};
             };
         };
 
-        pub const Kind = enum(i64) {
-            pub const protobuf_metadata = .{
-                .syntax = .proto3,
-            };
+        pub const common = struct {
+            pub const v1 = struct {};
+        };
 
-            Formal = 0,
-            Informal = 1,
+        pub const logs = struct {
+            pub const v1 = struct {};
+        };
+
+        pub const resource = struct {
+            pub const v1 = struct {};
         };
     };
 };
