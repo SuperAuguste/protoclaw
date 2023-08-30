@@ -16,24 +16,16 @@ pub const Document = struct {
     analyzer: Analyzer,
 };
 
-pub const Packages = std.AutoArrayHashMapUnmanaged(PackageLookup, std.ArrayListUnmanaged(
+pub const Packages = std.AutoArrayHashMapUnmanaged(PackageLookup, std.AutoArrayHashMapUnmanaged(
     packed struct {
         kind: enum(u1) { package, document },
         index: u31,
     },
+    void,
 ));
 pub const PackageLookup = packed struct {
     pub const parentless: u32 = std.math.maxInt(u32);
 
-    parent: u32,
-    name: u32,
-};
-
-pub const DeclMap = std.AutoArrayHashMapUnmanaged(DeclLookup, u32);
-pub const DeclLookup = packed struct {
-    pub const parentless: u32 = std.math.maxInt(u32);
-
-    document: u32,
     parent: u32,
     name: u32,
 };
@@ -46,7 +38,6 @@ documents: std.MultiArrayList(Document) = .{},
 import_path_to_document: std.StringHashMapUnmanaged(u32) = .{},
 
 packages: Packages = .{},
-decl_map: DeclMap = .{},
 
 pub const AddIncludePathError =
     std.mem.Allocator.Error ||
@@ -65,11 +56,6 @@ pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*DocumentSto
         .parent = PackageLookup.parentless,
         .name = 0,
     }, .{});
-    try store.decl_map.put(allocator, .{
-        .document = DeclLookup.not_document_but_package,
-        .parent = DeclLookup.parentless,
-        .name = 0,
-    }, 0);
 
     return store;
 }
@@ -139,6 +125,10 @@ pub fn analyze(store: *DocumentStore) !void {
     var analyzers = slice.items(.analyzer);
 
     for (asts, analyzers) |ast, *analyzer| {
+        try analyzer.preWalk(&ast);
+    }
+
+    for (asts, analyzers) |ast, *analyzer| {
         try analyzer.walk(&ast);
     }
 
@@ -160,12 +150,16 @@ fn emitInternal(store: *DocumentStore, writer: anytype, index: u32) !void {
     var doc_slice = store.documents.slice();
     var analyzers = doc_slice.items(.analyzer);
 
-    for (values[index].items) |child| {
-        try writer.print("pub const {} = struct {{\n", .{std.zig.fmtId(store.string_pool.get(keys[child.index].name))});
+    for (values[index].keys()) |child| {
         switch (child.kind) {
-            .package => try store.emitInternal(writer, child.index),
-            .document => try analyzers[child.index].emit(writer),
+            .package => {
+                try writer.print("pub const {} = struct {{\n", .{std.zig.fmtId(store.string_pool.get(keys[child.index].name))});
+                try store.emitInternal(writer, child.index);
+                try writer.writeAll("};\n\n");
+            },
+            .document => {
+                try analyzers[child.index].emit(writer);
+            },
         }
-        try writer.writeAll("};\n\n");
     }
 }

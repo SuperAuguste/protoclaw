@@ -14,11 +14,17 @@ document: u32,
 package: u32 = 0,
 
 syntax: enum { proto2, proto3 } = .proto2,
-imports: std.ArrayListUnmanaged(u32) = .{},
+imported_packages: std.AutoArrayHashMapUnmanaged(u32, void) = .{},
+imported_documents: std.AutoArrayHashMapUnmanaged(u32, void) = .{},
 
 decls: std.MultiArrayList(Decl) = .{},
 extra: std.ArrayListUnmanaged(u32) = .{},
 scratch: std.ArrayListUnmanaged(u32) = .{},
+
+lookup: Lookup = .{},
+
+const Lookup = std.AutoArrayHashMapUnmanaged(LookupKey, u32);
+const LookupKey = packed struct { parent: u32, name: u32 };
 
 const ScratchState = struct {
     analyzer: *Analyzer,
@@ -142,17 +148,11 @@ fn appendDecl(analyzer: *Analyzer, comptime tag: Decl.Tag, data: ExtraData(tag))
 
 // AST Walking
 
-pub const WalkError = std.mem.Allocator.Error || std.fmt.ParseIntError || error{Invalid};
-pub fn walk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
+pub fn preWalk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
     const allocator = analyzer.allocator;
-
-    const state = analyzer.saveScratch();
 
     var syntax_already_found = false;
     var package_already_found = false;
-
-    const this_decl = try analyzer.appendDecl(.root, .{});
-    std.debug.assert(this_decl == 0);
 
     const children = ast.getChildrenInExtra(0);
     for (children) |child| {
@@ -188,26 +188,61 @@ pub fn walk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
                         .parent = index,
                         .name = try analyzer.string_pool.store(ast.tokenSlice(token)),
                     }, .{});
-                    try analyzer.store.packages.values()[index].append(allocator, .{
+                    try analyzer.store.packages.values()[index].put(allocator, .{
                         .kind = .package,
                         .index = @intCast(gop.index),
-                    });
+                    }, void{});
                     index = @intCast(gop.index);
                 }
 
-                try analyzer.store.packages.values()[index].append(allocator, .{
+                try analyzer.store.packages.values()[index].put(allocator, .{
                     .kind = .document,
                     .index = @intCast(analyzer.document),
-                });
+                }, void{});
 
                 analyzer.package = index;
             },
+            else => {},
+        }
+    }
+
+    if (!package_already_found)
+        try analyzer.store.packages.values()[0].put(allocator, .{
+            .kind = .document,
+            .index = @intCast(analyzer.document),
+        }, void{});
+}
+
+pub const WalkError = std.mem.Allocator.Error || std.fmt.ParseIntError || error{Invalid};
+pub fn walk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
+    const allocator = analyzer.allocator;
+
+    const analyzers = analyzer.store.documents.items(.analyzer);
+    const state = analyzer.saveScratch();
+
+    const this_decl = try analyzer.appendDecl(.root, .{});
+    std.debug.assert(this_decl == 0);
+
+    const children = ast.getChildrenInExtra(0);
+    for (children) |child| {
+        switch (ast.node_tags[child]) {
             .import => {
                 const str = ast.tokenSlice(ast.node_main_tokens[child]);
                 const import_str = str[1 .. str.len - 1];
 
-                if (analyzer.store.import_path_to_document.get(import_str)) |import| {
-                    try analyzer.imports.append(allocator, import);
+                if (analyzer.store.import_path_to_document.get(import_str)) |document| {
+                    try analyzer.imported_documents.put(allocator, document, void{});
+
+                    var index = analyzers[document].package;
+                    while (true) {
+                        const key = analyzer.store.packages.keys()[index];
+
+                        if (key.parent == DocumentStore.PackageLookup.parentless)
+                            break;
+                        index = key.parent;
+                    }
+
+                    try analyzer.imported_packages.put(allocator, index, void{});
                 } else {
                     std.log.err("Could not resolve import '{s}'", .{import_str});
                     return error.Invalid;
@@ -220,12 +255,6 @@ pub fn walk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
     }
 
     analyzer.extraData(.root, this_decl).children = try state.appendAndReset();
-
-    if (!package_already_found)
-        try analyzer.store.packages.values()[0].append(allocator, .{
-            .kind = .document,
-            .index = @intCast(analyzer.document),
-        });
 }
 
 pub fn walkMessageDecl(
@@ -235,7 +264,6 @@ pub fn walkMessageDecl(
     node: u32,
 ) WalkError!u32 {
     const allocator = analyzer.allocator;
-    _ = allocator;
     std.debug.assert(ast.node_tags[node] == .message_decl);
 
     const state = analyzer.saveScratch();
@@ -245,11 +273,7 @@ pub fn walkMessageDecl(
         .parent = parent,
         .name = name,
     });
-    try analyzer.store.decl_map.put(analyzer.allocator, .{
-        .document = analyzer.document,
-        .parent = parent,
-        .name = name,
-    }, this_decl);
+    try analyzer.lookup.put(allocator, .{ .parent = parent, .name = name }, this_decl);
 
     const children = ast.getChildrenInExtra(node);
     for (children) |child| {
@@ -325,11 +349,7 @@ pub fn walkEnumDecl(
         .parent = parent,
         .name = name,
     });
-    try analyzer.store.decl_map.put(analyzer.allocator, .{
-        .document = analyzer.document,
-        .parent = parent,
-        .name = name,
-    }, this_decl);
+    try analyzer.lookup.put(allocator, .{ .parent = parent, .name = name }, this_decl);
 
     const children = ast.getChildrenInExtra(node);
     for (children) |child| {
@@ -391,20 +411,19 @@ pub fn analyze(analyzer: *Analyzer) AnalyzeError!void {
                     var iterator = std.mem.split(u8, real_type_string, ".");
 
                     if (is_absolute) {
-                        const first = try analyzer.string_pool.store(iterator.next().?);
-                        defer _ = analyzer.string_pool.freeIndex(first);
+                        var index: u32 = 0;
+                        while (iterator.next()) |segment| {
+                            const name = try analyzer.string_pool.store(segment);
+                            defer _ = analyzer.string_pool.freeIndex(name);
 
-                        std.log.info("{any}", .{analyzer.store.decl_map.get(.{
-                            .document = DocumentStore.DeclLookup.not_document_but_package,
-                            .parent = DocumentStore.DeclLookup.parentless,
-                            .name = first,
-                        })});
+                            const lookup = analyzer.store.packages.get(.{ .parent = index, .name = name });
+                            std.log.info("Z {s}: {s} -> {any}", .{ real_type_string, segment, lookup });
+                        }
                     }
 
                     // for (analyzer.imports.items) {}
 
                     // std.log.info("{s}", .{});
-                    // analyzer.store.decl_map.get(.{.document = analyzer.})
                 }
             },
             else => {},
