@@ -1,22 +1,6 @@
 const std = @import("std");
 
 pub const hello = struct {
-    pub const Reverse = enum(i64) {
-        pub const protobuf_metadata = .{
-            .syntax = .proto3,
-        };
-
-        Poggers = 0,
-    };
-
-    pub const Cool = enum(i64) {
-        pub const protobuf_metadata = .{
-            .syntax = .proto3,
-        };
-
-        None = 0,
-    };
-
     pub const pog = struct {
         pub const Variant = enum(i64) {
             pub const protobuf_metadata = .{
@@ -39,8 +23,24 @@ pub const hello = struct {
 
             variant: Variant = .{},
             reverse: Reverse = .{},
-            again: .pogpog.ReverseAgain = .{},
+            again: pogpog.ReverseAgain = .{},
         };
+    };
+
+    pub const Reverse = enum(i64) {
+        pub const protobuf_metadata = .{
+            .syntax = .proto3,
+        };
+
+        Poggers = 0,
+    };
+
+    pub const Cool = enum(i64) {
+        pub const protobuf_metadata = .{
+            .syntax = .proto3,
+        };
+
+        None = 0,
     };
 
     pub const Greeting = struct {
@@ -84,7 +84,7 @@ pub const hello = struct {
         recipient: Recipient = .{},
         anotherKind: Greeting.Kind = .{},
         anotherKind2: hello.Greeting.Kind = .{},
-        anotherKind3: .hello.Greeting.Kind = .{},
+        anotherKind3: hello.Greeting.Kind = .{},
         cool: Cool = .{},
     };
 };

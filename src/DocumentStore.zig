@@ -16,13 +16,12 @@ pub const Document = struct {
     analyzer: Analyzer,
 };
 
-pub const Packages = std.AutoArrayHashMapUnmanaged(PackageLookup, std.AutoArrayHashMapUnmanaged(
-    packed struct {
-        kind: enum(u1) { package, document },
-        index: u31,
-    },
-    void,
-));
+pub const Packages = std.AutoArrayHashMapUnmanaged(PackageLookup, struct {
+    /// u32 is index
+    packages: std.AutoArrayHashMapUnmanaged(u32, void) = .{},
+    /// u32 is index
+    documents: std.AutoArrayHashMapUnmanaged(u32, void) = .{},
+});
 pub const PackageLookup = packed struct {
     pub const parentless: u32 = std.math.maxInt(u32);
 
@@ -38,6 +37,16 @@ documents: std.MultiArrayList(Document) = .{},
 import_path_to_document: std.StringHashMapUnmanaged(u32) = .{},
 
 packages: Packages = .{},
+top_level_decls: std.AutoArrayHashMapUnmanaged(
+    packed struct {
+        package: u32,
+        name: u32,
+    },
+    packed struct {
+        document: u32,
+        index: u32,
+    },
+) = .{},
 
 pub const AddIncludePathError =
     std.mem.Allocator.Error ||
@@ -150,16 +159,13 @@ fn emitInternal(store: *DocumentStore, writer: anytype, index: u32) !void {
     var doc_slice = store.documents.slice();
     var analyzers = doc_slice.items(.analyzer);
 
-    for (values[index].keys()) |child| {
-        switch (child.kind) {
-            .package => {
-                try writer.print("pub const {} = struct {{\n", .{std.zig.fmtId(store.string_pool.get(keys[child.index].name))});
-                try store.emitInternal(writer, child.index);
-                try writer.writeAll("};\n\n");
-            },
-            .document => {
-                try analyzers[child.index].emit(writer);
-            },
-        }
+    for (values[index].packages.keys()) |child| {
+        try writer.print("pub const {} = struct {{\n", .{std.zig.fmtId(store.string_pool.get(keys[child].name))});
+        try store.emitInternal(writer, child);
+        try writer.writeAll("};\n\n");
+    }
+
+    for (values[index].documents.keys()) |child| {
+        try analyzers[child].emit(writer);
     }
 }

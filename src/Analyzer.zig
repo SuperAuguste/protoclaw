@@ -76,7 +76,7 @@ pub const Decl = struct {
             payload: extern union {
                 builtin: Tokenizer.Token.Tag,
                 unresolved: u32,
-                resolved: extern struct { document: u32, index: u32 },
+                resolved: DeclLocation,
             },
         };
 
@@ -188,17 +188,11 @@ pub fn preWalk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
                         .parent = index,
                         .name = try analyzer.string_pool.store(ast.tokenSlice(token)),
                     }, .{});
-                    try analyzer.store.packages.values()[index].put(allocator, .{
-                        .kind = .package,
-                        .index = @intCast(gop.index),
-                    }, void{});
+                    try analyzer.store.packages.values()[index].packages.put(allocator, @intCast(gop.index), void{});
                     index = @intCast(gop.index);
                 }
 
-                try analyzer.store.packages.values()[index].put(allocator, .{
-                    .kind = .document,
-                    .index = @intCast(analyzer.document),
-                }, void{});
+                try analyzer.store.packages.values()[index].documents.put(allocator, @intCast(analyzer.document), void{});
 
                 analyzer.package = index;
             },
@@ -207,10 +201,7 @@ pub fn preWalk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
     }
 
     if (!package_already_found)
-        try analyzer.store.packages.values()[0].put(allocator, .{
-            .kind = .document,
-            .index = @intCast(analyzer.document),
-        }, void{});
+        try analyzer.store.packages.values()[0].documents.put(allocator, @intCast(analyzer.document), void{});
 }
 
 pub const WalkError = std.mem.Allocator.Error || std.fmt.ParseIntError || error{Invalid};
@@ -273,7 +264,20 @@ pub fn walkMessageDecl(
         .parent = parent,
         .name = name,
     });
+
     try analyzer.lookup.put(allocator, .{ .parent = parent, .name = name }, this_decl);
+    if (parent == 0)
+        try analyzer.store.top_level_decls.put(
+            allocator,
+            .{
+                .package = analyzer.package,
+                .name = name,
+            },
+            .{
+                .document = analyzer.document,
+                .index = this_decl,
+            },
+        );
 
     const children = ast.getChildrenInExtra(node);
     for (children) |child| {
@@ -349,7 +353,20 @@ pub fn walkEnumDecl(
         .parent = parent,
         .name = name,
     });
+
     try analyzer.lookup.put(allocator, .{ .parent = parent, .name = name }, this_decl);
+    if (parent == 0)
+        try analyzer.store.top_level_decls.put(
+            allocator,
+            .{
+                .package = analyzer.package,
+                .name = name,
+            },
+            .{
+                .document = analyzer.document,
+                .index = this_decl,
+            },
+        );
 
     const children = ast.getChildrenInExtra(node);
     for (children) |child| {
@@ -387,7 +404,7 @@ pub fn walkEnumValueDecl(
 
 // Semantic analysis ("Linking" as protobuf calls it)
 
-pub const AnalyzeError = std.mem.Allocator.Error;
+pub const AnalyzeError = std.mem.Allocator.Error || error{Invalid};
 
 pub fn analyze(analyzer: *Analyzer) AnalyzeError!void {
     const tags = analyzer.decls.items(.tag);
@@ -408,27 +425,67 @@ pub fn analyze(analyzer: *Analyzer) AnalyzeError!void {
                     const is_absolute = type_string[0] == '.';
                     const real_type_string = type_string[if (is_absolute) 1 else 0..];
 
-                    var iterator = std.mem.split(u8, real_type_string, ".");
+                    var iterator = std.mem.splitSequence(u8, real_type_string, ".");
 
-                    if (is_absolute) {
-                        var index: u32 = 0;
-                        while (iterator.next()) |segment| {
-                            const name = try analyzer.string_pool.store(segment);
-                            defer _ = analyzer.string_pool.freeIndex(name);
+                    const maybe_decl_location = if (is_absolute)
+                        try analyzer.findDeclAbsolute(&iterator)
+                    else
+                        try analyzer.findDeclRelative(&iterator);
 
-                            const lookup = analyzer.store.packages.get(.{ .parent = index, .name = name });
-                            std.log.info("Z {s}: {s} -> {any}", .{ real_type_string, segment, lookup });
-                        }
+                    std.log.info("{s}   ->   {any}", .{ real_type_string, maybe_decl_location });
+
+                    if (maybe_decl_location) |decl_location| {
+                        type_data.tag = .resolved;
+                        type_data.payload = .{ .resolved = decl_location };
                     }
-
-                    // for (analyzer.imports.items) {}
-
-                    // std.log.info("{s}", .{});
                 }
             },
             else => {},
         }
     }
+}
+
+const DeclLocation = extern struct { document: u32, index: u32 };
+
+fn findDeclAbsolute(analyzer: *Analyzer, iterator: *std.mem.SplitIterator(u8, .sequence)) std.mem.Allocator.Error!?DeclLocation {
+    const analyzers = analyzer.store.documents.items(.analyzer);
+    var index: u32 = 0;
+    var maybe_document: ?u32 = null;
+
+    while (iterator.next()) |segment| {
+        const name = try analyzer.string_pool.store(segment);
+        defer _ = analyzer.string_pool.freeIndex(name);
+
+        if (maybe_document) |document| {
+            index = analyzers[document].lookup.get(.{ .parent = index, .name = name }) orelse return null;
+        } else {
+            const lookup = analyzer.store.packages.getIndex(.{ .parent = index, .name = name });
+            if (lookup) |l| {
+                index = @intCast(l);
+            } else {
+                if (analyzer.store.top_level_decls.get(.{ .package = index, .name = name })) |tld| {
+                    index = tld.index;
+                    if (tld.document != analyzer.document and !analyzer.imported_documents.contains(tld.document))
+                        return null;
+                    maybe_document = tld.document;
+                } else {
+                    return null;
+                }
+            }
+        }
+    }
+
+    return if (maybe_document) |document|
+        .{ .document = document, .index = index }
+    else
+        null;
+}
+
+fn findDeclRelative(analyzer: *Analyzer, iterator: *std.mem.SplitIterator(u8, .sequence)) std.mem.Allocator.Error!?DeclLocation {
+    _ = iterator;
+    _ = analyzer;
+
+    return null;
 }
 
 // Emission
@@ -448,32 +505,6 @@ pub fn emit(analyzer: *Analyzer, writer: anytype) EmitError(@TypeOf(writer))!voi
             else => {},
         }
     }
-}
-
-fn typeToTypeString(analyzer: *Analyzer, @"type": u32) []const u8 {
-    const type_data = analyzer.extraData(.type, @"type");
-    return switch (type_data.tag) {
-        .builtin => switch (type_data.payload.builtin) {
-            .keyword_int32 => "i32",
-            .keyword_sint32 => "i32",
-            .keyword_sfixed32 => "i32",
-            .keyword_int64 => "i64",
-            .keyword_sint64 => "i64",
-            .keyword_sfixed64 => "i64",
-            .keyword_uint32 => "u32",
-            .keyword_fixed32 => "u32",
-            .keyword_uint64 => "u64",
-            .keyword_fixed64 => "u64",
-            .keyword_float => "f32",
-            .keyword_double => "f64",
-            .keyword_bool => "bool",
-            .keyword_string => "[]const u8",
-            .keyword_bytes => "[]const u8",
-            else => unreachable,
-        },
-        .unresolved => analyzer.string_pool.get(type_data.payload.unresolved),
-        .resolved => "TODO",
-    };
 }
 
 fn typeToDefaultString(analyzer: *Analyzer, @"type": u32) []const u8 {
@@ -498,9 +529,96 @@ fn typeToDefaultString(analyzer: *Analyzer, @"type": u32) []const u8 {
             else => unreachable,
         },
         .unresolved => ".{}",
-        .resolved => "TODO",
+        .resolved => ".{}",
     };
 }
+
+const TypeStringFormatter = struct {
+    analyzer: *Analyzer,
+    type: u32,
+
+    pub fn format(
+        formatter: TypeStringFormatter,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = options;
+        _ = fmt;
+
+        const type_data = formatter.analyzer.extraData(.type, formatter.type);
+        switch (type_data.tag) {
+            .builtin => try writer.writeAll(switch (type_data.payload.builtin) {
+                .keyword_int32 => "i32",
+                .keyword_sint32 => "i32",
+                .keyword_sfixed32 => "i32",
+                .keyword_int64 => "i64",
+                .keyword_sint64 => "i64",
+                .keyword_sfixed64 => "i64",
+                .keyword_uint32 => "u32",
+                .keyword_fixed32 => "u32",
+                .keyword_uint64 => "u64",
+                .keyword_fixed64 => "u64",
+                .keyword_float => "f32",
+                .keyword_double => "f64",
+                .keyword_bool => "bool",
+                .keyword_string => "[]const u8",
+                .keyword_bytes => "[]const u8",
+                else => unreachable,
+            }),
+            .unresolved => try writer.writeAll(formatter.analyzer.string_pool.get(type_data.payload.unresolved)),
+            .resolved => {
+                var store = formatter.analyzer.store;
+                var analyzers = store.documents.items(.analyzer);
+                var analyzer = analyzers[type_data.payload.resolved.document];
+                var tags = analyzer.decls.items(.tag);
+
+                var name_stack = std.BoundedArray(u32, 128).init(0) catch unreachable;
+
+                var index = type_data.payload.resolved.index;
+                while (true) {
+                    switch (tags[index]) {
+                        .message_decl => {
+                            const message_data = analyzer.extraData(.message_decl, index);
+                            name_stack.append(message_data.name) catch unreachable;
+                            index = message_data.parent;
+                        },
+                        .enum_decl => {
+                            const enum_data = analyzer.extraData(.enum_decl, index);
+                            name_stack.append(enum_data.name) catch unreachable;
+                            index = enum_data.parent;
+                        },
+                        else => {},
+                    }
+
+                    if (index == 0)
+                        break;
+                }
+
+                index = analyzer.package;
+                while (true) {
+                    const key = store.packages.keys()[index];
+                    if (key.parent == DocumentStore.PackageLookup.parentless)
+                        break;
+
+                    name_stack.append(key.name) catch unreachable;
+                    index = key.parent;
+                }
+
+                index = name_stack.len - 1;
+                while (true) : (index -= 1) {
+                    const item = name_stack.constSlice()[index];
+                    try writer.writeAll(store.string_pool.get(item));
+
+                    if (index == 0)
+                        break
+                    else
+                        try writer.writeAll(".");
+                }
+            },
+        }
+    }
+};
 
 fn emitMessage(analyzer: *Analyzer, writer: anytype, message: u32) EmitError(@TypeOf(writer))!void {
     const tags = analyzer.decls.items(.tag);
@@ -548,20 +666,20 @@ fn emitMessage(analyzer: *Analyzer, writer: anytype, message: u32) EmitError(@Ty
             .required => {
                 try writer.print("{}: {s} = {s},\n", .{
                     std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
-                    analyzer.typeToTypeString(field_data.type),
+                    TypeStringFormatter{ .analyzer = analyzer, .type = field_data.type },
                     analyzer.typeToDefaultString(field_data.type),
                 });
             },
             .optional => {
                 try writer.print("{}: ?{s} = null,\n", .{
                     std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
-                    analyzer.typeToTypeString(field_data.type),
+                    TypeStringFormatter{ .analyzer = analyzer, .type = field_data.type },
                 });
             },
             .repeated => {
                 try writer.print("{}: std.ArrayListUnmanaged({s}) = .{{}},\n", .{
                     std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
-                    analyzer.typeToTypeString(field_data.type),
+                    TypeStringFormatter{ .analyzer = analyzer, .type = field_data.type },
                 });
             },
         }
