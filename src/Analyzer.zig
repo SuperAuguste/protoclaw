@@ -9,7 +9,9 @@ const Analyzer = @This();
 allocator: std.mem.Allocator,
 store: *DocumentStore,
 string_pool: *StringPool,
+
 document: u32,
+package: u32 = 0,
 
 syntax: enum { proto2, proto3 } = .proto2,
 imports: std.ArrayListUnmanaged(u32) = .{},
@@ -150,6 +152,7 @@ pub fn walk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
     var package_already_found = false;
 
     const this_decl = try analyzer.appendDecl(.root, .{});
+    std.debug.assert(this_decl == 0);
 
     const children = ast.getChildrenInExtra(0);
     for (children) |child| {
@@ -178,20 +181,26 @@ pub fn walk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
                 var token = ast.node_main_tokens[fqi];
                 const end = ast.node_data[fqi].package;
 
-                var packages = analyzer.store.packages;
+                var index: u31 = 0;
 
                 while (token <= end) : (token += 2) {
-                    const gop = try packages.subpackages.getOrPut(allocator, ast.tokenSlice(token));
-                    if (!gop.found_existing) {
-                        var new_packages = try allocator.create(DocumentStore.Packages);
-                        new_packages.* = .{};
-                        gop.value_ptr.* = new_packages;
-                    }
-
-                    packages = gop.value_ptr.*;
+                    const gop = try analyzer.store.packages.getOrPutValue(allocator, .{
+                        .parent = index,
+                        .name = try analyzer.string_pool.store(ast.tokenSlice(token)),
+                    }, .{});
+                    try analyzer.store.packages.values()[index].append(allocator, .{
+                        .kind = .package,
+                        .index = @intCast(gop.index),
+                    });
+                    index = @intCast(gop.index);
                 }
 
-                try packages.documents.append(allocator, analyzer.document);
+                try analyzer.store.packages.values()[index].append(allocator, .{
+                    .kind = .document,
+                    .index = @intCast(analyzer.document),
+                });
+
+                analyzer.package = index;
             },
             .import => {
                 const str = ast.tokenSlice(ast.node_main_tokens[child]);
@@ -213,7 +222,10 @@ pub fn walk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
     analyzer.extraData(.root, this_decl).children = try state.appendAndReset();
 
     if (!package_already_found)
-        try analyzer.store.packages.documents.append(allocator, analyzer.document);
+        try analyzer.store.packages.values()[0].append(allocator, .{
+            .kind = .document,
+            .index = @intCast(analyzer.document),
+        });
 }
 
 pub fn walkMessageDecl(
@@ -228,11 +240,16 @@ pub fn walkMessageDecl(
 
     const state = analyzer.saveScratch();
 
-    const name = ast.tokenSlice(ast.node_main_tokens[node]);
+    const name = try analyzer.string_pool.store(ast.tokenSlice(ast.node_main_tokens[node]));
     const this_decl = try analyzer.appendDecl(.message_decl, .{
         .parent = parent,
-        .name = try analyzer.string_pool.store(name),
+        .name = name,
     });
+    try analyzer.store.decl_map.put(analyzer.allocator, .{
+        .document = analyzer.document,
+        .parent = parent,
+        .name = name,
+    }, this_decl);
 
     const children = ast.getChildrenInExtra(node);
     for (children) |child| {
@@ -303,12 +320,16 @@ pub fn walkEnumDecl(
 
     const state = analyzer.saveScratch();
 
-    const name = ast.tokenSlice(ast.node_main_tokens[node]);
-
+    const name = try analyzer.string_pool.store(ast.tokenSlice(ast.node_main_tokens[node]));
     const this_decl = try analyzer.appendDecl(.enum_decl, .{
         .parent = parent,
-        .name = try analyzer.string_pool.store(name),
+        .name = name,
     });
+    try analyzer.store.decl_map.put(analyzer.allocator, .{
+        .document = analyzer.document,
+        .parent = parent,
+        .name = name,
+    }, this_decl);
 
     const children = ast.getChildrenInExtra(node);
     for (children) |child| {
@@ -346,10 +367,49 @@ pub fn walkEnumValueDecl(
 
 // Semantic analysis ("Linking" as protobuf calls it)
 
-pub const AnalyzeError = error{};
+pub const AnalyzeError = std.mem.Allocator.Error;
 
 pub fn analyze(analyzer: *Analyzer) AnalyzeError!void {
-    _ = analyzer;
+    const tags = analyzer.decls.items(.tag);
+
+    for (tags, 0..) |tag, i| {
+        switch (tag) {
+            .message_decl => {
+                const children = analyzer.extraData(.message_decl, @intCast(i)).children;
+                for (analyzer.extra.items[children.start..children.end]) |child_i| {
+                    const child_tag = tags[child_i];
+
+                    if (child_tag != .message_field_decl) continue;
+                    const field_data = analyzer.extraData(.message_field_decl, @intCast(child_i));
+                    const type_data = analyzer.extraData(.type, field_data.type);
+                    if (type_data.tag != .unresolved) continue;
+
+                    const type_string = analyzer.string_pool.get(type_data.payload.unresolved);
+                    const is_absolute = type_string[0] == '.';
+                    const real_type_string = type_string[if (is_absolute) 1 else 0..];
+
+                    var iterator = std.mem.split(u8, real_type_string, ".");
+
+                    if (is_absolute) {
+                        const first = try analyzer.string_pool.store(iterator.next().?);
+                        defer _ = analyzer.string_pool.freeIndex(first);
+
+                        std.log.info("{any}", .{analyzer.store.decl_map.get(.{
+                            .document = DocumentStore.DeclLookup.not_document_but_package,
+                            .parent = DocumentStore.DeclLookup.parentless,
+                            .name = first,
+                        })});
+                    }
+
+                    // for (analyzer.imports.items) {}
+
+                    // std.log.info("{s}", .{});
+                    // analyzer.store.decl_map.get(.{.document = analyzer.})
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 // Emission

@@ -21,5 +21,11 @@ pub fn store(pool: *StringPool, string: []const u8) std.mem.Allocator.Error!u32 
 pub fn free(pool: *StringPool, string: []const u8) bool {
     const ptr = pool.map.getPtr(string).?;
     ptr.* -= 1;
-    return ptr == 0;
+    return ptr.* == 0;
+}
+
+pub fn freeIndex(pool: *StringPool, index: u32) bool {
+    const ptr = &pool.map.values()[index];
+    ptr.* -= 1;
+    return ptr.* == 0;
 }

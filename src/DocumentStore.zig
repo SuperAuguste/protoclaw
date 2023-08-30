@@ -16,11 +16,27 @@ pub const Document = struct {
     analyzer: Analyzer,
 };
 
-pub const Packages = struct {
-    documents: std.ArrayListUnmanaged(u32) = .{},
-    subpackages: PackageMap = .{},
+pub const Packages = std.AutoArrayHashMapUnmanaged(PackageLookup, std.ArrayListUnmanaged(
+    packed struct {
+        kind: enum(u1) { package, document },
+        index: u31,
+    },
+));
+pub const PackageLookup = packed struct {
+    pub const parentless: u32 = std.math.maxInt(u32);
+
+    parent: u32,
+    name: u32,
 };
-pub const PackageMap = std.StringArrayHashMapUnmanaged(*Packages);
+
+pub const DeclMap = std.AutoArrayHashMapUnmanaged(DeclLookup, u32);
+pub const DeclLookup = packed struct {
+    pub const parentless: u32 = std.math.maxInt(u32);
+
+    document: u32,
+    parent: u32,
+    name: u32,
+};
 
 allocator: std.mem.Allocator,
 string_pool: StringPool,
@@ -28,7 +44,9 @@ include_paths: std.ArrayListUnmanaged([]const u8) = .{},
 documents: std.MultiArrayList(Document) = .{},
 /// Used to resolve import
 import_path_to_document: std.StringHashMapUnmanaged(u32) = .{},
-packages: *Packages,
+
+packages: Packages = .{},
+decl_map: DeclMap = .{},
 
 pub const AddIncludePathError =
     std.mem.Allocator.Error ||
@@ -41,9 +59,18 @@ pub const AddIncludePathError =
 
 pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*DocumentStore {
     var store = try allocator.create(DocumentStore);
-    var packages = try allocator.create(Packages);
-    packages.* = .{};
-    store.* = .{ .allocator = allocator, .string_pool = .{ .allocator = allocator }, .packages = packages };
+    store.* = .{ .allocator = allocator, .string_pool = .{ .allocator = allocator } };
+
+    try store.packages.put(allocator, .{
+        .parent = PackageLookup.parentless,
+        .name = 0,
+    }, .{});
+    try store.decl_map.put(allocator, .{
+        .document = DeclLookup.not_document_but_package,
+        .parent = DeclLookup.parentless,
+        .name = 0,
+    }, 0);
+
     return store;
 }
 
@@ -122,22 +149,22 @@ pub fn analyze(store: *DocumentStore) !void {
 
 pub fn emit(store: *DocumentStore, writer: anytype) !void {
     try writer.writeAll("const std = @import(\"std\");\n\n");
-    try store.emitInternal(writer, store.packages);
+    try store.emitInternal(writer, 0);
 }
 
-fn emitInternal(store: *DocumentStore, writer: anytype, packages: *Packages) !void {
-    const slice = packages.subpackages.entries.slice();
+fn emitInternal(store: *DocumentStore, writer: anytype, index: u32) !void {
+    const slice = store.packages.entries.slice();
     const keys = slice.items(.key);
     const values = slice.items(.value);
 
     var doc_slice = store.documents.slice();
     var analyzers = doc_slice.items(.analyzer);
 
-    for (keys, values) |key, value| {
-        try writer.print("pub const {} = struct {{\n", .{std.zig.fmtId(key)});
-        try store.emitInternal(writer, value);
-        for (value.documents.items) |document| {
-            try analyzers[document].emit(writer);
+    for (values[index].items) |child| {
+        try writer.print("pub const {} = struct {{\n", .{std.zig.fmtId(store.string_pool.get(keys[child.index].name))});
+        switch (child.kind) {
+            .package => try store.emitInternal(writer, child.index),
+            .document => try analyzers[child.index].emit(writer),
         }
         try writer.writeAll("};\n\n");
     }
