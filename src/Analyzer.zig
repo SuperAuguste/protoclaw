@@ -430,13 +430,16 @@ pub fn analyze(analyzer: *Analyzer) AnalyzeError!void {
                     const maybe_decl_location = if (is_absolute)
                         try analyzer.findDeclAbsolute(&iterator)
                     else
-                        try analyzer.findDeclRelative(&iterator);
+                        try analyzer.findDeclRelative(@intCast(i), &iterator);
 
-                    std.log.info("{s}   ->   {any}", .{ real_type_string, maybe_decl_location });
+                    // std.log.info("{s}   ->   {any}", .{ real_type_string, maybe_decl_location });
 
                     if (maybe_decl_location) |decl_location| {
                         type_data.tag = .resolved;
                         type_data.payload = .{ .resolved = decl_location };
+                    } else {
+                        std.log.err("Could not resolve symbol '{s}'", .{real_type_string});
+                        return error.Invalid;
                     }
                 }
             },
@@ -481,11 +484,78 @@ fn findDeclAbsolute(analyzer: *Analyzer, iterator: *std.mem.SplitIterator(u8, .s
         null;
 }
 
-fn findDeclRelative(analyzer: *Analyzer, iterator: *std.mem.SplitIterator(u8, .sequence)) std.mem.Allocator.Error!?DeclLocation {
-    _ = iterator;
-    _ = analyzer;
+fn findDeclRelative(
+    source_analyzer: *Analyzer,
+    decl_source: u32,
+    iterator: *std.mem.SplitIterator(u8, .sequence),
+) std.mem.Allocator.Error!?DeclLocation {
+    const tags = source_analyzer.decls.items(.tag);
+    var analyzers = source_analyzer.store.documents.items(.analyzer);
+    var store = source_analyzer.store;
 
-    return null;
+    var state: enum { document, package } = .document;
+    var index = decl_source;
+    var document = source_analyzer.document;
+
+    while (iterator.next()) |segment| {
+        const name = try store.string_pool.store(segment);
+        defer _ = store.string_pool.freeIndex(name);
+
+        while (true) {
+            switch (state) {
+                .document => {
+                    var analyzer = analyzers[document];
+                    const result = analyzer.lookup.get(.{ .parent = index, .name = name });
+                    if (result) |decl| {
+                        index = decl;
+                        break;
+                    } else {
+                        switch (tags[index]) {
+                            .message_decl => {
+                                const message_data = analyzer.extraData(.message_decl, index);
+                                index = message_data.parent;
+                            },
+                            .enum_decl => {
+                                const enum_data = analyzer.extraData(.enum_decl, index);
+                                index = enum_data.parent;
+                            },
+                            .root => {
+                                state = .package;
+                                index = analyzer.package;
+                            },
+                            else => return null,
+                        }
+                    }
+                },
+                .package => {
+                    if (store.top_level_decls.get(.{ .package = index, .name = name })) |val| {
+                        index = val.index;
+                        document = val.document;
+                        state = .document;
+                        break;
+                    }
+
+                    const result = store.packages.getIndex(.{ .parent = index, .name = name });
+                    if (result) |package| {
+                        index = @intCast(package);
+                        break;
+                    } else {
+                        if (index == 0)
+                            break;
+                        index = store.packages.keys()[index].parent;
+                    }
+                },
+            }
+        }
+    }
+
+    return switch (state) {
+        .document => .{
+            .document = document,
+            .index = index,
+        },
+        .package => null,
+    };
 }
 
 // Emission
@@ -566,7 +636,7 @@ const TypeStringFormatter = struct {
                 .keyword_bytes => "[]const u8",
                 else => unreachable,
             }),
-            .unresolved => try writer.writeAll(formatter.analyzer.string_pool.get(type_data.payload.unresolved)),
+            .unresolved => @panic("Unresolved type!"),
             .resolved => {
                 var store = formatter.analyzer.store;
                 var analyzers = store.documents.items(.analyzer);

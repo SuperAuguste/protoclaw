@@ -21,8 +21,8 @@ pub const hello = struct {
                 },
             };
 
-            variant: Variant = .{},
-            reverse: Reverse = .{},
+            variant: hello.pog.Variant = .{},
+            reverse: hello.Reverse = .{},
             again: pogpog.ReverseAgain = .{},
         };
     };
@@ -77,15 +77,15 @@ pub const hello = struct {
 
             name: []const u8 = "",
             coolness_percent: i64 = 0,
-            swag: pog.Swag = .{},
+            swag: hello.pog.Swag = .{},
         };
 
-        kind: Kind = .{},
-        recipient: Recipient = .{},
-        anotherKind: Greeting.Kind = .{},
+        kind: hello.Greeting.Kind = .{},
+        recipient: hello.Greeting.Recipient = .{},
+        anotherKind: hello.Greeting.Kind = .{},
         anotherKind2: hello.Greeting.Kind = .{},
         anotherKind3: hello.Greeting.Kind = .{},
-        cool: Cool = .{},
+        cool: hello.Cool = .{},
     };
 };
 
