@@ -497,55 +497,105 @@ fn findDeclRelative(
     var index = decl_source;
     var document = source_analyzer.document;
 
+    const first = iterator.next().?;
+
+    const first_name = try store.string_pool.store(first);
+    defer _ = store.string_pool.freeIndex(first_name);
+
+    while (true) {
+        switch (state) {
+            .document => {
+                var analyzer = analyzers[document];
+                const result = analyzer.lookup.get(.{ .parent = index, .name = first_name });
+                if (result) |decl| {
+                    index = decl;
+                    break;
+                } else {
+                    switch (tags[index]) {
+                        .message_decl => {
+                            const message_data = analyzer.extraData(.message_decl, index);
+                            index = message_data.parent;
+                        },
+                        .enum_decl => {
+                            const enum_data = analyzer.extraData(.enum_decl, index);
+                            index = enum_data.parent;
+                        },
+                        .root => {
+                            state = .package;
+                            index = analyzer.package;
+                        },
+                        else => return null,
+                    }
+                }
+            },
+            .package => {
+                if (store.top_level_decls.get(.{ .package = index, .name = first_name })) |val| {
+                    index = val.index;
+                    document = val.document;
+                    state = .document;
+                    break;
+                }
+
+                const result = store.packages.getIndex(.{ .parent = index, .name = first_name });
+                if (result) |package| {
+                    index = @intCast(package);
+                    break;
+                } else {
+                    if (index == 0)
+                        break;
+                    index = store.packages.keys()[index].parent;
+                }
+            },
+        }
+    }
+
     while (iterator.next()) |segment| {
         const name = try store.string_pool.store(segment);
         defer _ = store.string_pool.freeIndex(name);
 
-        while (true) {
-            switch (state) {
-                .document => {
-                    var analyzer = analyzers[document];
-                    const result = analyzer.lookup.get(.{ .parent = index, .name = name });
-                    if (result) |decl| {
-                        index = decl;
-                        break;
-                    } else {
-                        switch (tags[index]) {
-                            .message_decl => {
-                                const message_data = analyzer.extraData(.message_decl, index);
-                                index = message_data.parent;
-                            },
-                            .enum_decl => {
-                                const enum_data = analyzer.extraData(.enum_decl, index);
-                                index = enum_data.parent;
-                            },
-                            .root => {
-                                state = .package;
-                                index = analyzer.package;
-                            },
-                            else => return null,
-                        }
+        switch (state) {
+            .document => {
+                var analyzer = analyzers[document];
+                const result = analyzer.lookup.get(.{ .parent = index, .name = name });
+                if (result) |decl| {
+                    index = decl;
+                    continue;
+                } else {
+                    switch (tags[index]) {
+                        .message_decl => {
+                            const message_data = analyzer.extraData(.message_decl, index);
+                            index = message_data.parent;
+                        },
+                        .enum_decl => {
+                            const enum_data = analyzer.extraData(.enum_decl, index);
+                            index = enum_data.parent;
+                        },
+                        .root => {
+                            state = .package;
+                            index = analyzer.package;
+                        },
+                        else => return null,
                     }
-                },
-                .package => {
-                    if (store.top_level_decls.get(.{ .package = index, .name = name })) |val| {
-                        index = val.index;
-                        document = val.document;
-                        state = .document;
-                        break;
-                    }
+                }
+            },
+            .package => {
+                if (store.top_level_decls.get(.{ .package = index, .name = name })) |val| {
+                    index = val.index;
+                    document = val.document;
+                    state = .document;
+                    continue;
+                }
 
-                    const result = store.packages.getIndex(.{ .parent = index, .name = name });
-                    if (result) |package| {
-                        index = @intCast(package);
+                const result = store.packages.getIndex(.{ .parent = index, .name = name });
+                if (result) |package| {
+                    index = @intCast(package);
+                    continue;
+                } else {
+                    if (index == 0)
                         break;
-                    } else {
-                        if (index == 0)
-                            break;
-                        index = store.packages.keys()[index].parent;
-                    }
-                },
-            }
+                    index = store.packages.keys()[index].parent;
+                }
+            },
         }
     }
 
