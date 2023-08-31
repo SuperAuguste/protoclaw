@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package hello;
+
+enum Reverse {
+    Poggers = 0;
+}

@@ -2,6 +2,9 @@ syntax = "proto3";
 
 package hello.pog;
 
+import "reverse.proto";
+import "otherpkg.proto";
+
 enum Variant {
     Cool = 0;
     Awesome = 1;
@@ -9,4 +12,6 @@ enum Variant {
 
 message Swag {
     Variant variant = 1;
+    Reverse reverse = 2;
+    .pogpog.ReverseAgain again = 3;
 }

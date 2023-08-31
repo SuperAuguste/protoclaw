@@ -3,6 +3,7 @@ syntax = "proto3";
 package hello;
 
 import "pog/swag.proto";
+import "cool.proto";
 
 // option (.a.a).a.(a).(.c.c).b = 10;
 
@@ -15,6 +16,7 @@ message Greeting {
     Greeting.Kind anotherKind = 3;
     hello.Greeting.Kind anotherKind2 = 4;
     .hello.Greeting.Kind anotherKind3 = 5;
+    Cool cool = 6;
     
     enum Kind {
         // option (.a.a).a.(a).(.c.c).b = 10;
