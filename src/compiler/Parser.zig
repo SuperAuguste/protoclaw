@@ -939,6 +939,13 @@ fn parseEnumValueDecl(parser: *Parser) InternalParseError!u32 {
     _ = try parser.expectToken(.equals);
     const sign: Node.Data.Sign = if (parser.eatToken(.minus)) |_| .negative else .positive;
     const int_token = try parser.expectToken(.int_literal);
+
+    const compact_options_node = if (parser.eatToken(.l_bracket)) |bracket_token| b: {
+        const option_node = try parser.parseOption(bracket_token);
+        _ = try parser.expectToken(.r_bracket);
+        break :b option_node;
+    } else 0;
+
     _ = try parser.expectToken(.semicolon);
 
     try parser.nodes.append(parser.allocator, .{
@@ -954,7 +961,7 @@ fn parseEnumValueDecl(parser: *Parser) InternalParseError!u32 {
         .data = .{
             .enum_value_decl = .{
                 .number_node = int_node,
-                .compact_options_node = 0,
+                .compact_options_node = compact_options_node,
             },
         },
     });
