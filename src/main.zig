@@ -1,7 +1,7 @@
 const std = @import("std");
-const Parser = @import("Parser.zig");
-const Tokenizer = @import("Tokenizer.zig");
-const DocumentStore = @import("DocumentStore.zig");
+const Parser = @import("compiler/Parser.zig");
+const Tokenizer = @import("compiler/Tokenizer.zig");
+const DocumentStore = @import("compiler/DocumentStore.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;

@@ -27,14 +27,6 @@ pub const hello = struct {
         };
     };
 
-    pub const Reverse = enum(i64) {
-        pub const protobuf_metadata = .{
-            .syntax = .proto3,
-        };
-
-        Poggers = 0,
-    };
-
     pub const Cool = enum(i64) {
         pub const protobuf_metadata = .{
             .syntax = .proto3,
@@ -86,6 +78,14 @@ pub const hello = struct {
         anotherKind2: hello.Greeting.Kind = .{},
         anotherKind3: hello.Greeting.Kind = .{},
         cool: hello.Cool = .{},
+    };
+
+    pub const Reverse = enum(i64) {
+        pub const protobuf_metadata = .{
+            .syntax = .proto3,
+        };
+
+        Poggers = 0,
     };
 };
 
