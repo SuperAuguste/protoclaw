@@ -55,7 +55,8 @@ pub const AddIncludePathError =
     std.fs.File.ReadError ||
     std.fs.File.SeekError ||
     Parser.ParseError ||
-    error{IncludePathConflict};
+    std.fs.File.WriteError ||
+    error{ Invalid, IncludePathConflict };
 
 pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*DocumentStore {
     var store = try allocator.create(DocumentStore);
@@ -101,14 +102,18 @@ pub fn addIncludePath(store: *DocumentStore, path: []const u8) AddIncludePathErr
         try tokenizer.tokenize(store.allocator, source);
 
         var parser = Parser.init(store.allocator, source, tokenizer.tokens.slice());
-        const ast = parser.parse() catch |err| {
-            const token = parser.token_index;
-            const start = parser.token_starts[token];
-            const end = parser.token_ends[token];
+        const ast = try parser.parse();
 
-            std.log.err("{d}: {s}", .{ start, parser.source[start..end] });
-            return err;
-        };
+        if (ast.errors.len != 0) {
+            const writer = std.io.getStdErr().writer();
+            for (ast.errors) |err| {
+                const location = ast.calculateIndexLocation(ast.token_starts[err.token]);
+                try writer.print("{s}/{s}:{d}:{d}: ", .{ path, entry.path, location.row + 1, location.column + 1 });
+                try ast.renderError(err, writer);
+                try writer.writeAll("\n");
+            }
+            return error.Invalid;
+        }
 
         try store.documents.append(store.allocator, .{
             .include_path = @intCast(store.include_paths.items.len - 1),

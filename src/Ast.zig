@@ -18,6 +18,7 @@ node_main_tokens: []const u32,
 node_data: []const Node.Data,
 
 extra: []const u32,
+errors: []const Parser.Error,
 
 pub fn getChildrenInExtra(ast: Ast, node: u32) []const u32 {
     switch (ast.node_tags[node]) {
@@ -61,5 +62,35 @@ pub fn print(ast: Ast, writer: anytype, node: u32, depth: u32) @TypeOf(writer).E
             try ast.print(writer, option_data.value_node, depth + 1);
         },
         else => {},
+    }
+}
+
+/// Zero-indexed row and column information
+pub const Location = struct {
+    row: u32,
+    column: u32,
+};
+
+pub fn calculateIndexLocation(ast: Ast, index: u32) Location {
+    var row: u32 = 0;
+    var column: u32 = 0;
+
+    for (0..index) |i| {
+        column += 1;
+        if (ast.source[i] == '\n') {
+            column = 0;
+            row += 1;
+        }
+    }
+
+    return .{ .row = row, .column = column };
+}
+
+pub fn renderError(ast: Ast, @"error": Parser.Error, writer: anytype) @TypeOf(writer).Error!void {
+    switch (@"error".tag) {
+        .unexpected_token => try writer.print("expected {s}, found '{s}'", .{ @as(Token.Tag, @enumFromInt(@"error".extra)).toHumanReadable(), ast.tokenSlice(@"error".token) }),
+        .expected_identifier => try writer.print("expected identifier, found '{s}'", .{ast.tokenSlice(@"error".token)}),
+        .unexpected_top_level_token => try writer.print("expected import, package, option, message, enum, or service, found '{s}'", .{ast.tokenSlice(@"error".token)}),
+        .unexpected_message_token => try writer.print("expected option, message, enum, extensions, reserved, or fields, found '{s}'", .{ast.tokenSlice(@"error".token)}),
     }
 }

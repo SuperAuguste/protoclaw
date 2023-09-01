@@ -17,6 +17,20 @@ token_index: u32 = 0,
 nodes: NodeList = .{},
 extra: std.ArrayListUnmanaged(u32) = .{},
 scratch: std.ArrayListUnmanaged(u32) = .{},
+errors: std.ArrayListUnmanaged(Error) = .{},
+
+pub const Error = packed struct {
+    pub const Tag = enum(u8) {
+        unexpected_token,
+        expected_identifier,
+        unexpected_top_level_token,
+        unexpected_message_token,
+    };
+
+    tag: Tag,
+    token: u32,
+    extra: u32 = 0,
+};
 
 pub const NodeList = std.MultiArrayList(Node);
 pub const Node = struct {
@@ -153,24 +167,7 @@ pub fn init(allocator: std.mem.Allocator, source: []const u8, slice: Tokenizer.T
     };
 }
 
-fn nextToken(parser: *Parser) u32 {
-    const result = parser.token_index;
-    parser.token_index += 1;
-    return result;
-}
-
-fn eatToken(parser: *Parser, tag: Token.Tag) ?u32 {
-    return if (parser.token_tags[parser.token_index] == tag) parser.nextToken() else null;
-}
-
-fn expectToken(parser: *Parser, tag: Token.Tag) ParseError!u32 {
-    if (parser.token_tags[parser.token_index] != tag) {
-        return error.Invalid;
-    }
-    return parser.nextToken();
-}
-
-pub const ParseError = std.mem.Allocator.Error || error{Invalid};
+pub const ParseError = std.mem.Allocator.Error;
 pub fn parse(parser: *Parser) ParseError!Ast {
     const initial_scratch_len = parser.scratch.items.len;
     defer parser.scratch.items.len = initial_scratch_len;
@@ -186,22 +183,21 @@ pub fn parse(parser: *Parser) ParseError!Ast {
         },
     });
 
-    if (parser.eatToken(.keyword_syntax)) |syntax_token| {
-        _ = syntax_token;
-        _ = try parser.expectToken(.equals);
-        const spec_token = try parser.expectToken(.string_literal);
-        _ = try parser.expectToken(.semicolon);
-
-        try parser.nodes.append(parser.allocator, .{
-            .tag = .syntax,
-            .main_token = spec_token,
-            .data = .{ .none = void{} },
-        });
-        try parser.scratch.append(parser.allocator, @intCast(parser.nodes.len - 1));
-    }
+    if (parser.token_tags[parser.token_index] == .keyword_syntax)
+        if (parser.parseSyntax()) |node|
+            try parser.scratch.append(parser.allocator, node)
+        else |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        };
 
     while (parser.token_tags[parser.token_index] != .eof)
-        try parser.scratch.append(parser.allocator, try parser.parseFileElement());
+        if (parser.parseFileElement()) |node|
+            try parser.scratch.append(parser.allocator, node)
+        else |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Invalid => break,
+        };
 
     const start_extra = parser.extra.items.len;
     try parser.extra.appendSlice(parser.allocator, parser.scratch.items[initial_scratch_len..]);
@@ -224,10 +220,50 @@ pub fn parse(parser: *Parser) ParseError!Ast {
         .node_data = node_slices.items(.data),
 
         .extra = try parser.extra.toOwnedSlice(parser.allocator),
+        .errors = try parser.errors.toOwnedSlice(parser.allocator),
     };
 }
 
-fn parseFileElement(parser: *Parser) ParseError!u32 {
+const InternalParseError = std.mem.Allocator.Error || error{Invalid};
+
+fn nextToken(parser: *Parser) u32 {
+    const result = parser.token_index;
+    parser.token_index += 1;
+    return result;
+}
+
+fn eatToken(parser: *Parser, tag: Token.Tag) ?u32 {
+    return if (parser.token_tags[parser.token_index] == tag) parser.nextToken() else null;
+}
+
+fn expectToken(parser: *Parser, tag: Token.Tag) InternalParseError!u32 {
+    if (parser.token_tags[parser.token_index] != tag) {
+        try parser.errors.append(parser.allocator, .{
+            .tag = .unexpected_token,
+            .token = parser.token_index,
+            .extra = @intFromEnum(tag),
+        });
+        return error.Invalid;
+    }
+    return parser.nextToken();
+}
+
+fn parseSyntax(parser: *Parser) InternalParseError!u32 {
+    _ = try parser.expectToken(.keyword_syntax);
+    _ = try parser.expectToken(.equals);
+    const spec_token = try parser.expectToken(.string_literal);
+    _ = try parser.expectToken(.semicolon);
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .syntax,
+        .main_token = spec_token,
+        .data = .{ .none = void{} },
+    });
+
+    return @intCast(parser.nodes.len - 1);
+}
+
+fn parseFileElement(parser: *Parser) InternalParseError!u32 {
     switch (parser.token_tags[parser.token_index]) {
         .keyword_import => {
             parser.token_index += 1;
@@ -273,11 +309,17 @@ fn parseFileElement(parser: *Parser) ParseError!u32 {
         .keyword_message => return try parser.parseMessageDecl(),
         .keyword_service => return try parser.parseServiceDecl(),
         .keyword_enum => return try parser.parseEnumDecl(),
-        else => return error.Invalid,
+        else => {
+            try parser.errors.append(parser.allocator, .{
+                .tag = .unexpected_top_level_token,
+                .token = parser.token_index,
+            });
+            return error.Invalid;
+        },
     }
 }
 
-fn parseScalarValue(parser: *Parser) ParseError!u32 {
+fn parseScalarValue(parser: *Parser) InternalParseError!u32 {
     const value_token = parser.nextToken();
     switch (parser.token_tags[value_token]) {
         .identifier => try parser.nodes.append(parser.allocator, .{
@@ -320,7 +362,7 @@ fn parseScalarValue(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn parseExtensionName(parser: *Parser) ParseError!u32 {
+fn parseExtensionName(parser: *Parser) InternalParseError!u32 {
     const main_token = try parser.expectToken(.l_paren);
     try parser.nodes.append(parser.allocator, .{
         .tag = .extension_name,
@@ -331,7 +373,7 @@ fn parseExtensionName(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn parseOptionName(parser: *Parser) ParseError!u32 {
+fn parseOptionName(parser: *Parser) InternalParseError!u32 {
     const initial_scratch_len = parser.scratch.items.len;
     defer parser.scratch.items.len = initial_scratch_len;
 
@@ -376,7 +418,7 @@ fn parseOptionName(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn parseOptionValue(parser: *Parser) ParseError!u32 {
+fn parseOptionValue(parser: *Parser) InternalParseError!u32 {
     switch (parser.token_tags[parser.token_index]) {
         .identifier,
         .string_literal,
@@ -397,7 +439,7 @@ fn parseOptionValue(parser: *Parser) ParseError!u32 {
 }
 
 /// TODO: Support MessageLiteralWithBraces
-fn parseOption(parser: *Parser, first_token: u32) ParseError!u32 {
+fn parseOption(parser: *Parser, first_token: u32) InternalParseError!u32 {
     const name_node = try parser.parseOptionName();
     _ = try parser.expectToken(.equals);
     const value_node = try parser.parseOptionValue();
@@ -416,7 +458,7 @@ fn parseOption(parser: *Parser, first_token: u32) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn parseMessageDecl(parser: *Parser) ParseError!u32 {
+fn parseMessageDecl(parser: *Parser) InternalParseError!u32 {
     const initial_scratch_len = parser.scratch.items.len;
     defer parser.scratch.items.len = initial_scratch_len;
 
@@ -469,7 +511,13 @@ fn parseMessageDecl(parser: *Parser) ParseError!u32 {
                 break;
             },
 
-            else => return error.Invalid,
+            else => {
+                try parser.errors.append(parser.allocator, .{
+                    .tag = .unexpected_message_token,
+                    .token = parser.token_index,
+                });
+                return error.Invalid;
+            },
         });
     }
 
@@ -489,7 +537,7 @@ fn parseMessageDecl(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn parseEnumDecl(parser: *Parser) ParseError!u32 {
+fn parseEnumDecl(parser: *Parser) InternalParseError!u32 {
     const initial_scratch_len = parser.scratch.items.len;
     defer parser.scratch.items.len = initial_scratch_len;
 
@@ -534,7 +582,7 @@ fn parseEnumDecl(parser: *Parser) ParseError!u32 {
 }
 
 /// TODO: Implement services
-fn parseServiceDecl(parser: *Parser) ParseError!u32 {
+fn parseServiceDecl(parser: *Parser) InternalParseError!u32 {
     _ = try parser.expectToken(.keyword_service);
     _ = try parser.expectIdentifierToken(&.{});
     _ = try parser.expectToken(.l_brace);
@@ -564,7 +612,7 @@ fn parseServiceDecl(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn parseMethodDecl(parser: *Parser) ParseError!void {
+fn parseMethodDecl(parser: *Parser) InternalParseError!void {
     _ = try parser.expectToken(.keyword_rpc);
     _ = try parser.expectIdentifierToken(&.{});
     _ = try parser.parseMessageType();
@@ -589,7 +637,7 @@ fn parseMethodDecl(parser: *Parser) ParseError!void {
     }
 }
 
-fn parseMessageType(parser: *Parser) ParseError!void {
+fn parseMessageType(parser: *Parser) InternalParseError!void {
     _ = try parser.expectToken(.l_paren);
     _ = parser.eatToken(.keyword_stream);
     _ = try parser.parseFullyQualifiedIdentifier();
@@ -597,7 +645,7 @@ fn parseMessageType(parser: *Parser) ParseError!void {
 }
 
 /// Fix invalid parse (,)
-fn parseExtensionRangeDecl(parser: *Parser) ParseError!u32 {
+fn parseExtensionRangeDecl(parser: *Parser) InternalParseError!u32 {
     const main_token = try parser.expectToken(.keyword_extensions);
     var last_token: u32 = 0;
     while (parser.eatToken(.int_literal)) |_| {
@@ -631,7 +679,7 @@ fn parseExtensionRangeDecl(parser: *Parser) ParseError!u32 {
 
 /// Fix invalid parse (,)
 /// + parse string reservations
-fn parseMessageReservedDecl(parser: *Parser) ParseError!u32 {
+fn parseMessageReservedDecl(parser: *Parser) InternalParseError!u32 {
     const main_token = try parser.expectToken(.keyword_reserved);
     var last_token: u32 = 0;
     while (parser.eatToken(.int_literal)) |_| {
@@ -654,7 +702,7 @@ fn parseMessageReservedDecl(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn parseQualifiedIdentifier(parser: *Parser) ParseError!u32 {
+fn parseQualifiedIdentifier(parser: *Parser) InternalParseError!u32 {
     const first = try parser.expectToken(.identifier);
     var last: u32 = first;
 
@@ -669,7 +717,7 @@ fn parseQualifiedIdentifier(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn parseFullyQualifiedIdentifier(parser: *Parser) ParseError!u32 {
+fn parseFullyQualifiedIdentifier(parser: *Parser) InternalParseError!u32 {
     const fq_dot = parser.eatToken(.dot);
     const first = try parser.expectToken(.identifier);
     var last: u32 = first;
@@ -685,10 +733,17 @@ fn parseFullyQualifiedIdentifier(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn expectIdentifierToken(parser: *Parser, comptime exclude: []const Token.Tag) ParseError!u32 {
+fn expectIdentifierToken(parser: *Parser, comptime exclude: []const Token.Tag) InternalParseError!u32 {
     const token_tag = parser.token_tags[parser.token_index];
+
     inline for (exclude) |tag| {
-        if (token_tag == tag) return error.Invalid;
+        if (token_tag == tag) {
+            try parser.errors.append(parser.allocator, .{
+                .tag = .expected_identifier,
+                .token = parser.token_index,
+            });
+            return error.Invalid;
+        }
     }
 
     return switch (token_tag) {
@@ -733,12 +788,18 @@ fn expectIdentifierToken(parser: *Parser, comptime exclude: []const Token.Tag) P
         .keyword_group,
         .keyword_returns,
         => parser.nextToken(),
-        else => error.Invalid,
+        else => {
+            try parser.errors.append(parser.allocator, .{
+                .tag = .expected_identifier,
+                .token = parser.token_index,
+            });
+            return error.Invalid;
+        },
     };
 }
 
 /// TODO: Support compact options
-fn parseMessageFieldDecl(parser: *Parser, where: enum { message, oneof }) ParseError!u32 {
+fn parseMessageFieldDecl(parser: *Parser, where: enum { message, oneof }) InternalParseError!u32 {
     switch (parser.token_tags[parser.token_index]) {
         .keyword_required,
         .keyword_optional,
@@ -806,7 +867,7 @@ fn parseMessageFieldDecl(parser: *Parser, where: enum { message, oneof }) ParseE
     return @intCast(parser.nodes.len - 1);
 }
 
-pub fn parseOneofDecl(parser: *Parser) ParseError!u32 {
+pub fn parseOneofDecl(parser: *Parser) InternalParseError!u32 {
     const initial_scratch_len = parser.scratch.items.len;
     defer parser.scratch.items.len = initial_scratch_len;
 
@@ -872,7 +933,7 @@ pub fn parseOneofDecl(parser: *Parser) ParseError!u32 {
 }
 
 /// TODO: Support compact options
-fn parseEnumValueDecl(parser: *Parser) ParseError!u32 {
+fn parseEnumValueDecl(parser: *Parser) InternalParseError!u32 {
     const main_token = try parser.expectIdentifierToken(&.{ .keyword_option, .keyword_reserved });
 
     _ = try parser.expectToken(.equals);
@@ -900,7 +961,7 @@ fn parseEnumValueDecl(parser: *Parser) ParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
-fn parseMessageLiteral(parser: *Parser) ParseError!u32 {
+fn parseMessageLiteral(parser: *Parser) InternalParseError!u32 {
     const initial_scratch_len = parser.scratch.items.len;
     defer parser.scratch.items.len = initial_scratch_len;
 
