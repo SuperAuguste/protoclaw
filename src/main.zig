@@ -7,7 +7,7 @@ pub fn main() !void {
     const allocator = std.heap.page_allocator;
     var store = try DocumentStore.create(allocator);
 
-    try store.addIncludePath("example");
+    try store.addIncludePath("examples/basic");
     // try store.addIncludePath("/Users/auguste.rame/Documents/Repos/opentelemetry-proto");
     try store.analyze();
 
@@ -23,5 +23,5 @@ pub fn main() !void {
     const rendered = try ast.render(allocator);
     defer allocator.free(rendered);
 
-    try std.fs.cwd().writeFile("example/example.zig", rendered);
+    try std.fs.cwd().writeFile("examples/basic/proto.zig", rendered);
 }

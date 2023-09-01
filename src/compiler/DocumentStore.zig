@@ -94,7 +94,7 @@ pub fn addIncludePath(store: *DocumentStore, path: []const u8) AddIncludePathErr
             return error.IncludePathConflict;
         }
 
-        std.log.debug("Processing file {s}/{s}", .{ path, entry.path });
+        // std.log.debug("Processing file {s}/{s}", .{ path, entry.path });
 
         const source = try entry.dir.readFileAlloc(store.allocator, entry.basename, std.math.maxInt(usize));
 
@@ -106,12 +106,14 @@ pub fn addIncludePath(store: *DocumentStore, path: []const u8) AddIncludePathErr
 
         if (ast.errors.len != 0) {
             const writer = std.io.getStdErr().writer();
+            try writer.writeAll("\x1b[1;31mEncountered errors while compiling protobuf files:\x1b[0m\n");
             for (ast.errors) |err| {
                 const location = ast.calculateIndexLocation(ast.token_starts[err.token]);
                 try writer.print("{s}/{s}:{d}:{d}: ", .{ path, entry.path, location.row + 1, location.column + 1 });
                 try ast.renderError(err, writer);
                 try writer.writeAll("\n");
             }
+            try writer.writeAll("\n");
             return error.Invalid;
         }
 

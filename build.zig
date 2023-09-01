@@ -1,6 +1,6 @@
 const std = @import("std");
-// const LazyPath = std.build.LazyPath;
-// const protoclaw = @import("src/lib.zig");
+const LazyPath = std.build.LazyPath;
+const protoclaw = @import("src/lib.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -35,15 +35,16 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
-    // const example_generate_step = protoclaw.GenerateStep.init(b, .{
-    //     .out = .{
-    //         .single = LazyPath.relative("example/example.zig"),
-    //     },
-    // });
+    // Examples
 
-    // example_generate_step.includeStandard();
-    // example_generate_step.walkAndAddSourceFiles("example");
+    const example_generate_step = protoclaw.GenerateStep.create(b, .{
+        .name = "basic",
+        .include = &.{
+            .{ .path = "examples/basic" },
+        },
+        .out = .{ .path = "examples/basic/proto.zig" },
+    });
 
-    // const example_step = b.step("example", "Run example");
-    // example_step.dependOn(&run_unit_tests.step);
+    const example_step = b.step("example", "Run example");
+    example_step.dependOn(&example_generate_step.step);
 }

@@ -36,7 +36,7 @@ const ScratchState = struct {
         try state.analyzer.extra.appendSlice(state.analyzer.allocator, state.analyzer.scratch.items[state.initial_scratch_len..]);
         state.analyzer.scratch.items.len = state.initial_scratch_len;
 
-        return Children{
+        return .{
             .start = @intCast(start),
             .end = @intCast(state.analyzer.extra.items.len),
         };
@@ -245,7 +245,8 @@ pub fn walk(analyzer: *Analyzer, ast: *const Ast) WalkError!void {
         }
     }
 
-    analyzer.extraData(.root, this_decl).children = try state.appendAndReset();
+    const children_extra = try state.appendAndReset();
+    analyzer.extraData(.root, this_decl).children = children_extra;
 }
 
 pub fn walkMessageDecl(
@@ -289,7 +290,8 @@ pub fn walkMessageDecl(
         });
     }
 
-    analyzer.extraData(.message_decl, this_decl).children = try state.appendAndReset();
+    const children_extra = try state.appendAndReset();
+    analyzer.extraData(.message_decl, this_decl).children = children_extra;
     return this_decl;
 }
 
@@ -378,7 +380,8 @@ pub fn walkEnumDecl(
         }
     }
 
-    analyzer.extraData(.enum_decl, this_decl).children = try state.appendAndReset();
+    const children_extra = try state.appendAndReset();
+    analyzer.extraData(.enum_decl, this_decl).children = children_extra;
     return this_decl;
 }
 
