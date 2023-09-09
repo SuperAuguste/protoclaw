@@ -141,3 +141,81 @@ fn decodeInternal(
         else => @compileError("Unsupported: " ++ @typeName(T)),
     }
 }
+
+pub fn encode(value: anytype, writer: anytype) !void {
+    try encodeInternal(value, writer, true);
+}
+
+fn typeToWireType(comptime T: type) WireType {
+    if (@typeInfo(T) == .Struct or @typeInfo(T) == .Pointer or @typeInfo(T) == .Array) return .len;
+    if (@typeInfo(T) == .Int or @typeInfo(T) == .Bool or @typeInfo(T) == .Enum) return .varint;
+    @compileError("Wire type not handled: " ++ @typeName(T));
+}
+
+fn encodeMessageFields(value: anytype, writer: anytype) !void {
+    const T = @TypeOf(value);
+    inline for (@field(T, "tags")) |rel| {
+        const subval = @field(value, rel[0]);
+        const SubT = @TypeOf(subval);
+
+        if (comptime isArrayList(SubT) and !b: {
+            const Child = @typeInfo(@field(SubT, "Slice")).Pointer.child;
+            const cti = @typeInfo(Child);
+            break :b cti == .Int or cti == .Enum;
+        }) {
+            for (subval.items) |item| {
+                try RecordTag.write(.{ .field_number = rel[1], .type = typeToWireType(@TypeOf(item)) }, writer);
+                try encodeInternal(item, writer, false);
+            }
+        } else {
+            try RecordTag.write(.{ .field_number = rel[1], .type = typeToWireType(SubT) }, writer);
+            try encodeInternal(subval, writer, false);
+        }
+    }
+}
+
+fn encodeInternal(
+    value: anytype,
+    writer: anytype,
+    top: bool,
+) !void {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .Struct => {
+            if (comptime isArrayList(T)) {
+                var count_writer = std.io.countingWriter(std.io.null_writer);
+                for (value.items) |item| try encodeInternal(item, count_writer.writer(), false);
+                try std.leb.writeULEB128(writer, count_writer.bytes_written);
+                for (value.items) |item| try encodeInternal(item, writer, false);
+            } else {
+                if (!top) {
+                    var count_writer = std.io.countingWriter(std.io.null_writer);
+                    try encodeMessageFields(value, count_writer.writer());
+                    try std.leb.writeULEB128(writer, count_writer.bytes_written);
+                }
+                try encodeMessageFields(value, writer);
+            }
+        },
+        .Pointer => |ptr| {
+            _ = ptr;
+            // TODO: Handle non-slices
+            if (T == []const u8) {
+                try std.leb.writeULEB128(writer, value.len);
+                try writer.writeAll(value);
+            } else @compileError("Slices not implemented");
+        },
+        .Enum => try encodeInternal(@intFromEnum(value), writer, false),
+        .Int => |i| switch (i.signedness) {
+            .signed => try std.leb.writeILEB128(writer, value),
+            .unsigned => try std.leb.writeULEB128(writer, value),
+        },
+        .Bool => try std.leb.writeULEB128(writer, @intFromBool(value)),
+        .Array => {
+            var count_writer = std.io.countingWriter(std.io.null_writer);
+            for (value) |item| try encodeInternal(item, count_writer.writer(), false);
+            try std.leb.writeULEB128(writer, count_writer.bytes_written);
+            for (value) |item| try encodeInternal(item, writer, false);
+        },
+        else => @compileError("Unsupported: " ++ @typeName(T)),
+    }
+}
