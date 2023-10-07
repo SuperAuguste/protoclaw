@@ -109,7 +109,7 @@ pub const Decl = struct {
             parent: u32,
             name: u32,
 
-            value: i64,
+            value: i32,
         };
 
         root: Root,
@@ -401,7 +401,7 @@ pub fn walkEnumValueDecl(
         .name = try analyzer.string_pool.store(name),
 
         // TODO: Parse all int types properly
-        .value = @intFromEnum(ast.node_data[data.number_node].number_literal) * @as(i64, @intCast(try std.fmt.parseInt(u64, ast.tokenSlice(ast.node_main_tokens[data.number_node]), 0))),
+        .value = @as(i32, @intCast(@intFromEnum(ast.node_data[data.number_node].number_literal))) * @as(i32, @intCast(try std.fmt.parseInt(u32, ast.tokenSlice(ast.node_main_tokens[data.number_node]), 0))),
     });
 }
 
@@ -651,8 +651,19 @@ fn typeToDefaultString(analyzer: *Analyzer, @"type": u32) []const u8 {
             .keyword_bytes => "\"\"",
             else => unreachable,
         },
-        .unresolved => ".{}",
-        .resolved => ".{}",
+        .unresolved => unreachable,
+        .resolved => b: {
+            const index = type_data.payload.resolved.index;
+            var store = analyzer.store;
+            var analyzers = store.documents.items(.analyzer);
+            var actual_analyzer = analyzers[type_data.payload.resolved.document];
+            var tags = actual_analyzer.decls.items(.tag);
+            break :b switch (tags[index]) {
+                .message_decl => ".{}",
+                .enum_decl => "@enumFromInt(0)",
+                inline else => |tag| @panic("TODO: " ++ @tagName(tag)),
+            };
+        },
     };
 }
 
@@ -814,7 +825,7 @@ fn emitMessage(analyzer: *Analyzer, writer: anytype, message: u32) EmitError(@Ty
 fn emitEnum(analyzer: *Analyzer, writer: anytype, @"enum": u32) EmitError(@TypeOf(writer))!void {
     const enum_data = analyzer.extraData(.enum_decl, @"enum");
 
-    try writer.print("pub const {} = enum(i64) {{\n", .{std.zig.fmtId(analyzer.string_pool.get(enum_data.name))});
+    try writer.print("pub const {} = enum(i32) {{\n", .{std.zig.fmtId(analyzer.string_pool.get(enum_data.name))});
     try writer.print("pub const protobuf_metadata = .{{.syntax = .{s},}};\n\n", .{@tagName(analyzer.syntax)});
 
     for (analyzer.extra.items[enum_data.children.start..enum_data.children.end]) |value| {

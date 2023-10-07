@@ -58,14 +58,15 @@ fn decodeMessageFields(comptime T: type, allocator: std.mem.Allocator, reader: a
     while (length == 0 or counting_reader.bytes_read < length) {
         // TODO: Add type sameness checks
         const split = RecordTag.read(counting_reader.reader()) catch |err| switch (err) {
-            error.EndOfStream => return value,
+            error.EndOfStream, error.Overflow => return value,
             else => return err,
         };
 
-        inline for (@field(T, "tags")) |rel| {
-            if (split.field_number == rel[1]) {
-                decodeInternal(@TypeOf(@field(value, rel[0])), &@field(value, rel[0]), allocator, counting_reader.reader(), false) catch |err| switch (err) {
-                    error.EndOfStream => return value,
+        inline for (comptime std.meta.fieldNames(@TypeOf(T.protobuf_metadata.field_numbers))) |field_name| {
+            const field_number = @field(T.protobuf_metadata.field_numbers, field_name);
+            if (split.field_number == field_number) {
+                decodeInternal(@TypeOf(@field(value, field_name)), &@field(value, field_name), allocator, counting_reader.reader(), false) catch |err| switch (err) {
+                    error.EndOfStream, error.Overflow => return value,
                     else => return err,
                 };
             }
@@ -154,8 +155,9 @@ fn typeToWireType(comptime T: type) WireType {
 
 fn encodeMessageFields(value: anytype, writer: anytype) !void {
     const T = @TypeOf(value);
-    inline for (@field(T, "tags")) |rel| {
-        const subval = @field(value, rel[0]);
+    inline for (comptime std.meta.fieldNames(@TypeOf(T.protobuf_metadata.field_numbers))) |field_name| {
+        const field_number = @field(T.protobuf_metadata.field_numbers, field_name);
+        const subval = @field(value, field_name);
         const SubT = @TypeOf(subval);
 
         if (comptime isArrayList(SubT) and !b: {
@@ -164,11 +166,11 @@ fn encodeMessageFields(value: anytype, writer: anytype) !void {
             break :b cti == .Int or cti == .Enum;
         }) {
             for (subval.items) |item| {
-                try RecordTag.write(.{ .field_number = rel[1], .type = typeToWireType(@TypeOf(item)) }, writer);
+                try RecordTag.write(.{ .field_number = field_number, .wire_type = typeToWireType(@TypeOf(item)) }, writer);
                 try encodeInternal(item, writer, false);
             }
         } else {
-            try RecordTag.write(.{ .field_number = rel[1], .type = typeToWireType(SubT) }, writer);
+            try RecordTag.write(.{ .field_number = field_number, .wire_type = typeToWireType(SubT) }, writer);
             try encodeInternal(subval, writer, false);
         }
     }
@@ -216,6 +218,6 @@ fn encodeInternal(
             try std.leb.writeULEB128(writer, count_writer.bytes_written);
             for (value) |item| try encodeInternal(item, writer, false);
         },
-        else => @compileError("Unsupported: " ++ @typeName(T)),
+        else => @compileError("Unsupported: " ++ @typeName(T) ++ " of value " ++ std.fmt.comptimePrint("{any}", .{value})),
     }
 }

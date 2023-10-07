@@ -4,7 +4,7 @@ const std = @import("std");
 
 pub const hello = struct {
     pub const pog = struct {
-        pub const Variant = enum(i64) {
+        pub const Variant = enum(i32) {
             pub const protobuf_metadata = .{
                 .syntax = .proto3,
             };
@@ -23,21 +23,13 @@ pub const hello = struct {
                 },
             };
 
-            variant: hello.pog.Variant = .{},
-            reverse: hello.Reverse = .{},
-            again: pogpog.ReverseAgain = .{},
+            variant: hello.pog.Variant = @enumFromInt(0),
+            reverse: hello.Reverse = @enumFromInt(0),
+            again: pogpog.ReverseAgain = @enumFromInt(0),
         };
     };
 
-    pub const Reverse = enum(i64) {
-        pub const protobuf_metadata = .{
-            .syntax = .proto3,
-        };
-
-        Poggers = 0,
-    };
-
-    pub const Cool = enum(i64) {
+    pub const Cool = enum(i32) {
         pub const protobuf_metadata = .{
             .syntax = .proto3,
         };
@@ -58,7 +50,7 @@ pub const hello = struct {
             },
         };
 
-        pub const Kind = enum(i64) {
+        pub const Kind = enum(i32) {
             pub const protobuf_metadata = .{
                 .syntax = .proto3,
             };
@@ -82,17 +74,25 @@ pub const hello = struct {
             swag: hello.pog.Swag = .{},
         };
 
-        kind: hello.Greeting.Kind = .{},
+        kind: hello.Greeting.Kind = @enumFromInt(0),
         recipient: hello.Greeting.Recipient = .{},
-        anotherKind: hello.Greeting.Kind = .{},
-        anotherKind2: hello.Greeting.Kind = .{},
-        anotherKind3: hello.Greeting.Kind = .{},
-        cool: hello.Cool = .{},
+        anotherKind: hello.Greeting.Kind = @enumFromInt(0),
+        anotherKind2: hello.Greeting.Kind = @enumFromInt(0),
+        anotherKind3: hello.Greeting.Kind = @enumFromInt(0),
+        cool: hello.Cool = @enumFromInt(0),
+    };
+
+    pub const Reverse = enum(i32) {
+        pub const protobuf_metadata = .{
+            .syntax = .proto3,
+        };
+
+        Poggers = 0,
     };
 };
 
 pub const pogpog = struct {
-    pub const ReverseAgain = enum(i64) {
+    pub const ReverseAgain = enum(i32) {
         pub const protobuf_metadata = .{
             .syntax = .proto3,
         };
