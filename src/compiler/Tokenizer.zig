@@ -220,7 +220,7 @@ pub fn tokenize(tokenizer: *Tokenizer, allocator: std.mem.Allocator, buffer: []c
 
             switch (state) {
                 .start => switch (char) {
-                    'a'...'z', 'A'...'Z' => {
+                    'a'...'z', 'A'...'Z', '_' => {
                         tag = .identifier;
                         state = .identifier;
                     },
@@ -305,7 +305,14 @@ pub fn tokenize(tokenizer: *Tokenizer, allocator: std.mem.Allocator, buffer: []c
                         break;
                     },
 
-                    else => break,
+                    else => {
+                        try tokenizer.tokens.append(allocator, .{
+                            .tag = .invalid,
+                            .start = start,
+                            .end = index,
+                        });
+                        break :all_loop;
+                    },
                 },
                 .identifier => switch (char) {
                     'a'...'z', 'A'...'Z', '0'...'9', '_' => {},

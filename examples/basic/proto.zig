@@ -80,6 +80,7 @@ pub const hello = struct {
         anotherKind2: hello.Greeting.Kind = @enumFromInt(0),
         anotherKind3: hello.Greeting.Kind = @enumFromInt(0),
         cool: hello.Cool = @enumFromInt(0),
+        yay: std.AutoArrayHashMapUnmanaged(u32, []const u8) = .{},
     };
 
     pub const Reverse = enum(i32) {

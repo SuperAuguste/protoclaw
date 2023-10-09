@@ -82,6 +82,7 @@ pub const Node = struct {
         /// cardinality (required/optional/repeated) is main_tokens[type_name_node] - 1
         /// field number is main_tokens[message_field_decl] + 2
         message_field_decl,
+        map_field_decl,
         /// main_token is value name
         enum_value_decl,
 
@@ -122,6 +123,12 @@ pub const Node = struct {
             compact_options_node: u32,
         };
 
+        pub const MapFieldDecl = packed struct(u64) {
+            /// [2]u32 from extra
+            map_key_value_type_extra: u32,
+            compact_options_node: u32,
+        };
+
         pub const EnumValueDecl = packed struct(u64) {
             number_node: u32,
             compact_options_node: u32,
@@ -146,6 +153,7 @@ pub const Node = struct {
 
         children_in_extra: ChildrenInExtra,
         message_field_decl: MessageFieldDecl,
+        map_field_decl: MapFieldDecl,
         enum_value_decl: EnumValueDecl,
 
         extension_range_decl: ExtensionRangeDecl,
@@ -477,6 +485,7 @@ fn parseMessageDecl(parser: *Parser) InternalParseError!u32 {
             .keyword_enum => try parser.parseEnumDecl(),
             .keyword_extensions => try parser.parseExtensionRangeDecl(),
             .keyword_reserved => try parser.parseMessageReservedDecl(),
+            .keyword_map => try parser.parseMapFieldDecl(),
 
             .keyword_required,
             .keyword_optional,
@@ -702,6 +711,68 @@ fn parseMessageReservedDecl(parser: *Parser) InternalParseError!u32 {
     return @intCast(parser.nodes.len - 1);
 }
 
+fn parseMapFieldDecl(parser: *Parser) InternalParseError!u32 {
+    const initial_scratch_len = parser.scratch.items.len;
+    defer parser.scratch.items.len = initial_scratch_len;
+
+    _ = try parser.expectToken(.keyword_map);
+    _ = try parser.expectToken(.l_angle);
+    try parser.scratch.append(parser.allocator, switch (parser.token_tags[parser.token_index]) {
+        .keyword_int32,
+        .keyword_int64,
+        .keyword_uint32,
+        .keyword_uint64,
+        .keyword_sint32,
+        .keyword_sint64,
+        .keyword_fixed32,
+        .keyword_fixed64,
+        .keyword_sfixed32,
+        .keyword_sfixed64,
+        .keyword_bool,
+        .keyword_string,
+        => b: {
+            try parser.nodes.append(parser.allocator, .{
+                .tag = .builtin_type,
+                .main_token = parser.nextToken(),
+                .data = .{ .none = void{} },
+            });
+            break :b @intCast(parser.nodes.len - 1);
+        },
+        else => @panic("TODO ERROR"),
+    });
+    _ = try parser.expectToken(.comma);
+    try parser.scratch.append(parser.allocator, try parser.parseTypeName());
+    _ = try parser.expectToken(.r_angle);
+
+    const start_extra = parser.extra.items.len;
+    try parser.extra.appendSlice(parser.allocator, parser.scratch.items[initial_scratch_len..]);
+
+    const main_token = try parser.expectIdentifierToken(&.{});
+
+    _ = try parser.expectToken(.equals);
+    _ = try parser.expectToken(.int_literal);
+
+    const compact_options_node = if (parser.eatToken(.l_bracket)) |bracket_token| b: {
+        const option_node = try parser.parseOption(bracket_token);
+        _ = try parser.expectToken(.r_bracket);
+        break :b option_node;
+    } else 0;
+
+    _ = try parser.expectToken(.semicolon);
+
+    try parser.nodes.append(parser.allocator, .{
+        .tag = .map_field_decl,
+        .main_token = main_token,
+        .data = .{
+            .map_field_decl = .{
+                .map_key_value_type_extra = @intCast(start_extra),
+                .compact_options_node = compact_options_node,
+            },
+        },
+    });
+    return @intCast(parser.nodes.len - 1);
+}
+
 fn parseQualifiedIdentifier(parser: *Parser) InternalParseError!u32 {
     const first = try parser.expectToken(.identifier);
     var last: u32 = first;
@@ -798,23 +869,8 @@ fn expectIdentifierToken(parser: *Parser, comptime exclude: []const Token.Tag) I
     };
 }
 
-/// TODO: Support compact options
-fn parseMessageFieldDecl(parser: *Parser, where: enum { message, oneof }) InternalParseError!u32 {
-    switch (parser.token_tags[parser.token_index]) {
-        .keyword_required,
-        .keyword_optional,
-        .keyword_repeated,
-        => {
-            if (where == .oneof) {
-                return error.Invalid;
-            }
-
-            parser.token_index += 1;
-        },
-        else => {},
-    }
-
-    const type_name_node: u32 = switch (parser.token_tags[parser.token_index]) {
+fn parseTypeName(parser: *Parser) InternalParseError!u32 {
+    return switch (parser.token_tags[parser.token_index]) {
         .dot, .identifier => try parser.parseFullyQualifiedIdentifier(),
         .keyword_int32,
         .keyword_sint32,
@@ -841,6 +897,25 @@ fn parseMessageFieldDecl(parser: *Parser, where: enum { message, oneof }) Intern
         },
         else => return error.Invalid,
     };
+}
+
+/// TODO: Support compact options
+fn parseMessageFieldDecl(parser: *Parser, where: enum { message, oneof }) InternalParseError!u32 {
+    switch (parser.token_tags[parser.token_index]) {
+        .keyword_required,
+        .keyword_optional,
+        .keyword_repeated,
+        => {
+            if (where == .oneof) {
+                return error.Invalid;
+            }
+
+            parser.token_index += 1;
+        },
+        else => {},
+    }
+
+    const type_name_node = try parser.parseTypeName();
     const main_token = try parser.expectIdentifierToken(&.{});
 
     _ = try parser.expectToken(.equals);

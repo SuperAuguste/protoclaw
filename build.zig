@@ -8,6 +8,11 @@ const examples = .{
         .includes = .{"."},
         .out = "proto.zig",
     },
+    .{
+        .name = "scip",
+        .includes = .{"."},
+        .out = "scip.zig",
+    },
 };
 
 pub fn build(b: *std.Build) void {
@@ -48,6 +53,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
 
     // Examples
+
+    const test_messages_proto3_generate_step = protoclaw.GenerateStep.create(b, .{
+        .name = "test_message_proto3",
+        .includes = &.{ .{ .path = b.pathJoin(&.{"include"}) }, .{ .path = b.pathJoin(&.{"test"}) } },
+        .out = .{ .path = b.pathJoin(&.{ "test", "test_message_proto3.zig" }) },
+    });
+    b.getInstallStep().dependOn(&test_messages_proto3_generate_step.step);
 
     inline for (examples) |example| {
         var includes: [example.includes.len]LazyPath = undefined;

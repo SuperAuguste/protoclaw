@@ -91,6 +91,6 @@ pub fn renderError(ast: Ast, @"error": Parser.Error, writer: anytype) @TypeOf(wr
         .unexpected_token => try writer.print("expected {s}, found '{s}'", .{ @as(Token.Tag, @enumFromInt(@"error".extra)).toHumanReadable(), ast.tokenSlice(@"error".token) }),
         .expected_identifier => try writer.print("expected identifier, found '{s}'", .{ast.tokenSlice(@"error".token)}),
         .unexpected_top_level_token => try writer.print("expected import, package, option, message, enum, or service, found '{s}'", .{ast.tokenSlice(@"error".token)}),
-        .unexpected_message_token => try writer.print("expected option, message, enum, extensions, reserved, or fields, found '{s}'", .{ast.tokenSlice(@"error".token)}),
+        .unexpected_message_token => try writer.print("expected option, message, enum, extensions, reserved, map, or fields, found '{s}'", .{ast.tokenSlice(@"error".token)}),
     }
 }

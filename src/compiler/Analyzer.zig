@@ -62,6 +62,7 @@ pub const Decl = struct {
         type,
         message_decl,
         message_field_decl,
+        map_field_decl,
         enum_decl,
         enum_value_decl,
     };
@@ -87,14 +88,24 @@ pub const Decl = struct {
             children: Children = Children.none,
         };
 
-        pub const MessageFieldDecl = extern struct {
-            pub const Cardinality = enum(u8) { required, optional, repeated };
+        pub const FieldCardinality = enum(u8) { required, optional, repeated };
 
+        pub const MessageFieldDecl = extern struct {
             parent: u32,
             name: u32,
 
             type: u32,
-            cardinality: Cardinality,
+            cardinality: FieldCardinality,
+            field_number: u64,
+        };
+
+        pub const MapFieldDecl = extern struct {
+            parent: u32,
+            name: u32,
+
+            key_type: Tokenizer.Token.Tag,
+            value_type: u32,
+
             field_number: u64,
         };
 
@@ -116,6 +127,7 @@ pub const Decl = struct {
         type: Type,
         message_decl: MessageDecl,
         message_field_decl: MessageFieldDecl,
+        map_field_decl: MapFieldDecl,
         enum_decl: EnumDecl,
         enum_value_decl: EnumValueDecl,
     };
@@ -284,6 +296,7 @@ pub fn walkMessageDecl(
     for (children) |child| {
         try analyzer.scratch.append(analyzer.allocator, switch (ast.node_tags[child]) {
             .message_field_decl => try analyzer.walkMessageFieldDecl(ast, this_decl, child),
+            .map_field_decl => try analyzer.walkMapFieldDecl(ast, this_decl, child),
             .message_decl => try analyzer.walkMessageDecl(ast, this_decl, child),
             .enum_decl => try analyzer.walkEnumDecl(ast, this_decl, child),
             else => continue,
@@ -293,6 +306,28 @@ pub fn walkMessageDecl(
     const children_extra = try state.appendAndReset();
     analyzer.extraData(.message_decl, this_decl).children = children_extra;
     return this_decl;
+}
+
+pub fn walkType(
+    analyzer: *Analyzer,
+    ast: *const Ast,
+    node: u32,
+) WalkError!u32 {
+    return try analyzer.appendDecl(.type, switch (ast.node_tags[node]) {
+        .builtin_type => Decl.Extra.Type{
+            .tag = .builtin,
+            .payload = .{
+                .builtin = ast.token_tags[ast.node_main_tokens[node]],
+            },
+        },
+        .qualified_identifier => Decl.Extra.Type{
+            .tag = .unresolved,
+            .payload = .{
+                .unresolved = try analyzer.string_pool.store(ast.qualifiedIdentifierSlice(node)),
+            },
+        },
+        else => unreachable,
+    });
 }
 
 pub fn walkMessageFieldDecl(
@@ -307,7 +342,7 @@ pub fn walkMessageFieldDecl(
 
     const name = ast.tokenSlice(ast.node_main_tokens[node]);
     const data = ast.node_data[node].message_field_decl;
-    const cardinality: Decl.Extra.MessageFieldDecl.Cardinality = switch (ast.token_tags[ast.node_main_tokens[data.type_name_node] - 1]) {
+    const cardinality: Decl.Extra.FieldCardinality = switch (ast.token_tags[ast.node_main_tokens[data.type_name_node] - 1]) {
         .keyword_required => .required,
         .keyword_optional => .optional,
         .keyword_repeated => .repeated,
@@ -318,22 +353,34 @@ pub fn walkMessageFieldDecl(
         .parent = parent,
         .name = try analyzer.string_pool.store(name),
 
-        .type = try analyzer.appendDecl(.type, switch (ast.node_tags[data.type_name_node]) {
-            .builtin_type => Decl.Extra.Type{
-                .tag = .builtin,
-                .payload = .{
-                    .builtin = ast.token_tags[ast.node_main_tokens[data.type_name_node]],
-                },
-            },
-            .qualified_identifier => Decl.Extra.Type{
-                .tag = .unresolved,
-                .payload = .{
-                    .unresolved = try analyzer.string_pool.store(ast.qualifiedIdentifierSlice(data.type_name_node)),
-                },
-            },
-            else => unreachable,
-        }),
+        .type = try analyzer.walkType(ast, data.type_name_node),
         .cardinality = cardinality,
+        // TODO: Parse all int types properly
+        .field_number = try std.fmt.parseUnsigned(u64, ast.tokenSlice(ast.node_main_tokens[node] + 2), 10),
+    });
+}
+
+pub fn walkMapFieldDecl(
+    analyzer: *Analyzer,
+    ast: *const Ast,
+    parent: u32,
+    node: u32,
+) WalkError!u32 {
+    const allocator = analyzer.allocator;
+    _ = allocator;
+    std.debug.assert(ast.node_tags[node] == .map_field_decl);
+
+    const name = ast.tokenSlice(ast.node_main_tokens[node]);
+    const data = ast.node_data[node].map_field_decl;
+
+    const key_type_node, const value_type_node = ast.extra[data.map_key_value_type_extra..][0..2].*;
+
+    return try analyzer.appendDecl(.map_field_decl, .{
+        .parent = parent,
+        .name = try analyzer.string_pool.store(name),
+
+        .key_type = ast.token_tags[ast.node_main_tokens[key_type_node]],
+        .value_type = try analyzer.walkType(ast, value_type_node),
         // TODO: Parse all int types properly
         .field_number = try std.fmt.parseUnsigned(u64, ast.tokenSlice(ast.node_main_tokens[node] + 2), 10),
     });
@@ -419,9 +466,19 @@ pub fn analyze(analyzer: *Analyzer) AnalyzeError!void {
                 for (analyzer.extra.items[children.start..children.end]) |child_i| {
                     const child_tag = tags[child_i];
 
-                    if (child_tag != .message_field_decl) continue;
-                    const field_data = analyzer.extraData(.message_field_decl, @intCast(child_i));
-                    const type_data = analyzer.extraData(.type, field_data.type);
+                    const extra_type = switch (child_tag) {
+                        .message_field_decl => b: {
+                            const field_data = analyzer.extraData(.message_field_decl, @intCast(child_i));
+                            break :b field_data.type;
+                        },
+                        .map_field_decl => b: {
+                            const field_data = analyzer.extraData(.map_field_decl, @intCast(child_i));
+                            break :b field_data.value_type;
+                        },
+                        else => continue,
+                    };
+
+                    const type_data = analyzer.extraData(.type, extra_type);
                     if (type_data.tag != .unresolved) continue;
 
                     const type_string = analyzer.string_pool.get(type_data.payload.unresolved);
@@ -792,30 +849,59 @@ fn emitMessage(analyzer: *Analyzer, writer: anytype, message: u32) EmitError(@Ty
     // }
 
     for (analyzer.extra.items[message_data.children.start..message_data.children.end]) |field| {
-        if (tags[field] != .message_field_decl) continue;
+        switch (tags[field]) {
+            .message_field_decl => {
+                const field_data = analyzer.extraData(.message_field_decl, field);
 
-        const field_data = analyzer.extraData(.message_field_decl, field);
+                switch (field_data.cardinality) {
+                    .required => {
+                        try writer.print("{}: {s} = {s},\n", .{
+                            std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
+                            TypeStringFormatter{ .analyzer = analyzer, .type = field_data.type },
+                            analyzer.typeToDefaultString(field_data.type),
+                        });
+                    },
+                    .optional => {
+                        try writer.print("{}: ?{s} = null,\n", .{
+                            std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
+                            TypeStringFormatter{ .analyzer = analyzer, .type = field_data.type },
+                        });
+                    },
+                    .repeated => {
+                        try writer.print("{}: std.ArrayListUnmanaged({s}) = .{{}},\n", .{
+                            std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
+                            TypeStringFormatter{ .analyzer = analyzer, .type = field_data.type },
+                        });
+                    },
+                }
+            },
+            .map_field_decl => {
+                const field_data = analyzer.extraData(.map_field_decl, field);
 
-        switch (field_data.cardinality) {
-            .required => {
-                try writer.print("{}: {s} = {s},\n", .{
+                try writer.print("{}: std.AutoArrayHashMapUnmanaged({s}, {s}) = .{{}},\n", .{
                     std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
-                    TypeStringFormatter{ .analyzer = analyzer, .type = field_data.type },
-                    analyzer.typeToDefaultString(field_data.type),
+                    switch (field_data.key_type) {
+                        .keyword_int32 => "i32",
+                        .keyword_sint32 => "i32",
+                        .keyword_sfixed32 => "i32",
+                        .keyword_int64 => "i64",
+                        .keyword_sint64 => "i64",
+                        .keyword_sfixed64 => "i64",
+                        .keyword_uint32 => "u32",
+                        .keyword_fixed32 => "u32",
+                        .keyword_uint64 => "u64",
+                        .keyword_fixed64 => "u64",
+                        .keyword_float => "f32",
+                        .keyword_double => "f64",
+                        .keyword_bool => "bool",
+                        .keyword_string => "[]const u8",
+                        .keyword_bytes => "[]const u8",
+                        else => unreachable,
+                    },
+                    TypeStringFormatter{ .analyzer = analyzer, .type = field_data.value_type },
                 });
             },
-            .optional => {
-                try writer.print("{}: ?{s} = null,\n", .{
-                    std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
-                    TypeStringFormatter{ .analyzer = analyzer, .type = field_data.type },
-                });
-            },
-            .repeated => {
-                try writer.print("{}: std.ArrayListUnmanaged({s}) = .{{}},\n", .{
-                    std.zig.fmtId(analyzer.string_pool.get(field_data.name)),
-                    TypeStringFormatter{ .analyzer = analyzer, .type = field_data.type },
-                });
-            },
+            else => {},
         }
     }
 

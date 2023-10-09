@@ -5,11 +5,19 @@ pub const RecordTag = packed struct(u16) {
     wire_type: WireType,
     field_number: u13,
 
-    pub fn read(reader: anytype) (@TypeOf(reader).Error || error{ Overflow, EndOfStream })!RecordTag {
+    pub fn ReadError(comptime Reader: type) type {
+        return Reader.Error || error{ Overflow, EndOfStream };
+    }
+
+    pub fn read(reader: anytype) ReadError(@TypeOf(reader))!RecordTag {
         return @bitCast(try std.leb.readULEB128(u16, reader));
     }
 
-    pub fn write(tag: RecordTag, writer: anytype) @TypeOf(writer).Error!void {
+    pub fn WriteError(comptime Writer: type) type {
+        return Writer.Error;
+    }
+
+    pub fn write(tag: RecordTag, writer: anytype) WriteError(@TypeOf(writer))!void {
         try std.leb.writeULEB128(writer, @as(u16, @bitCast(tag)));
     }
 };
@@ -26,7 +34,7 @@ pub const RawRecord = struct {
     },
 };
 
-pub fn readRaw(reader: anytype) !RawRecord {
+pub fn readRaw(reader: anytype) RecordTag.ReadError(@TypeOf(reader))!RawRecord {
     const tag = try RecordTag.read(reader);
     return .{
         .field_number = tag.field_number,
@@ -143,7 +151,11 @@ fn decodeInternal(
     }
 }
 
-pub fn encode(value: anytype, writer: anytype) !void {
+pub fn EncodeError(comptime Writer: type) type {
+    return RecordTag.WriteError(Writer);
+}
+
+pub fn encode(value: anytype, writer: anytype) EncodeError(@TypeOf(writer))!void {
     try encodeInternal(value, writer, true);
 }
 
@@ -180,7 +192,7 @@ fn encodeInternal(
     value: anytype,
     writer: anytype,
     top: bool,
-) !void {
+) EncodeError(@TypeOf(writer))!void {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .Struct => {
